@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.vapepos.app",
+    "sha256_cert_fingerprints": ["81:44:0C:C3:19:75:10:03:84:C0:43:BE:1A:A1:3D:AD:5F:8B:19:67:6F:70:E1:EF:65:F4:C3:4A:7C:14:AA:30"]
+  }
+}]

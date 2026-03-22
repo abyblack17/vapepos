@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuth()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin';
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myBusinessId() {
+      return myProfile().businessId;
+    }
+
+    function myRole() {
+      return myProfile().role;
+    }
+
+    function belongsTo(businessId) {
+      return isAuth()
+          && myBusinessId() == businessId
+          && myProfile().active == true;
+    }
+
+    function isAdmin(businessId) {
+      return belongsTo(businessId) && myRole() == 'Administrador';
+    }
+
+    function isManagerOrAbove(businessId) {
+      return belongsTo(businessId)
+          && myRole() in ['Administrador', 'Encargado'];
+    }
+
+    // ── /users/{uid} ─────────────────────────────────────────
+    match /users/{uid} {
+      allow read:   if (isAuth() && request.auth.uid == uid) || isSuperAdmin();
+      allow create: if isAuth() && request.auth.uid == uid;
+      allow update: if (isAuth() && request.auth.uid == uid
+                    && !request.resource.data.diff(resource.data)
+                        .affectedKeys().hasAny(['businessId','role']))
+                    || isSuperAdmin();
+      allow delete: if false;
+    }
+
+    // ── /businesses/{businessId}/** ───────────────────────────
+    // Regla principal: cualquier empleado activo del negocio
+    // puede leer y escribir en su propia rama
+    match /businesses/{businessId} {
+      allow read:   if belongsTo(businessId) || isSuperAdmin();
+      allow create: if false; // Solo via Cloud Function
+      allow update: if isAdmin(businessId) || isSuperAdmin();
+      allow delete: if false;
+
+      // Todas las subcolecciones del negocio
+      // Regla permisiva: empleado activo puede leer/escribir todo
+      // Las restricciones finas (quien puede borrar) se manejan en el cliente
+      match /{collection}/{docId} {
+        allow read:   if belongsTo(businessId) || isSuperAdmin();
+        allow write:  if belongsTo(businessId) || isSuperAdmin();
+      }
+
+      // Subsubcolecciones (settings/config, etc.)
+      match /{collection}/{docId}/{subcol}/{subdocId} {
+        allow read:   if belongsTo(businessId);
+        allow write:  if belongsTo(businessId);
+      }
+    }
+
+    // ── /providers_directory — Directorio global de proveedores ─
+    // Cualquier usuario autenticado puede leer
+    // Solo el admin del negocio puede crear/editar/eliminar su propio perfil
+    match /providers_directory/{docId} {
+      allow read:   if isAuth();
+      allow create: if isAuth()
+                    && request.resource.data.businessId == myBusinessId()
+                    && myRole() == 'Administrador';
+      allow update: if (isAuth()
+                    && resource.data.businessId == myBusinessId()
+                    && myRole() == 'Administrador')
+                    || isSuperAdmin();
+      allow delete: if (isAuth()
+                    && resource.data.businessId == myBusinessId()
+                    && myRole() == 'Administrador')
+                    || isSuperAdmin();
+    }
+
+    // Anuncios del sistema — superadmin escribe, todos leen
+    match /system_announcements/{docId} {
+      allow read:  if isAuth();
+      allow write: if isSuperAdmin();
+    }
+
+    // Bloquear todo lo demas
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

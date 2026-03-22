@@ -1,0 +1,110 @@
+{
+  "id": "com.vapepos.app",
+  "name": "VapePOS — Sistema POS",
+  "short_name": "VapePOS",
+  "description": "Sistema POS completo para tiendas de vape. Gestiona ventas, inventario, recargas de liquidos, clientes, caja y reportes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "portrait",
+  "background_color": "#080d18",
+  "theme_color": "#00e5a0",
+  "lang": "es",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "finance"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot-dashboard.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dashboard — Resumen del negocio"
+    },
+    {
+      "src": "/screenshot-pos.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Punto de Venta"
+    },
+    {
+      "src": "/screenshot-recargas.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Recargas de Liquidos"
+    },
+    {
+      "src": "/screenshot-caja.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Control de Caja"
+    },
+    {
+      "src": "/screenshot-config.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Configuracion del Negocio"
+    },
+    {
+      "src": "/screenshot-backup.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Backup y Datos"
+    },
+    {
+      "src": "/screenshot-acciones.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Panel de Acciones Diarias"
+    },
+    {
+      "src": "/screenshot-sugerencias.png",
+      "sizes": "757x1600",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Sugerencias y Soporte"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Punto de Venta",
+      "short_name": "POS",
+      "description": "Ir directamente al punto de venta",
+      "url": "/",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
+}
