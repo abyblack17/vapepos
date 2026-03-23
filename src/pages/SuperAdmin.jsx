@@ -318,37 +318,41 @@ export default function SuperAdmin() {
   return (
     <div className="min-h-screen bg-[#080d18]">
       {/* Header */}
-      <div className="bg-[#0c1424] border-b border-white/5 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-4">
-          <div className="font-display text-2xl font-black gradient-neon">VapePOS</div>
-          <div className="bg-[#8b5cf6]/20 border border-[#8b5cf6]/30 text-[#a78bfa] text-xs font-bold px-3 py-1 rounded-full">SUPER ADMIN</div>
+      <div className="bg-[#0c1424] border-b border-white/5 px-4 py-3 flex items-center justify-between sticky top-0 z-10 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="font-display text-xl font-black gradient-neon shrink-0">VapePOS</div>
+          <div className="bg-[#8b5cf6]/20 border border-[#8b5cf6]/30 text-[#a78bfa] text-xs font-bold px-2 py-0.5 rounded-full shrink-0">SUPER ADMIN</div>
         </div>
-        <div className="flex items-center gap-4">
-          <button onClick={loadAll} className="text-xs text-slate-400 hover:text-slate-200 transition-colors">Actualizar datos</button>
-          <span className="text-sm text-slate-400">{currentUser?.email}</span>
-          <button onClick={logout} className="text-xs px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all">
-            Cerrar sesion
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={loadAll} className="text-xs text-slate-400 hover:text-slate-200 transition-colors hidden sm:block">Actualizar datos</button>
+          <button onClick={loadAll} className="sm:hidden text-slate-400 hover:text-slate-200 transition-colors p-1.5 rounded-lg bg-white/5" title="Actualizar">🔄</button>
+          <span className="text-xs text-slate-400 hidden md:block truncate max-w-[160px]">{currentUser?.email}</span>
+          <button onClick={logout} className="text-xs px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all shrink-0">
+            <span className="hidden sm:inline">Cerrar sesion</span>
+            <span className="sm:hidden">✕</span>
           </button>
         </div>
       </div>
 
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
-        {/* Tabs */}
-        <div className="flex gap-1 bg-[#101c35] rounded-xl p-1 w-fit flex-wrap">
-          {TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all relative ${
-                tab === t ? 'bg-[#8b5cf6] text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}>
-              {t}
-              {t === 'Sugerencias' && newSuggestions > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center">{newSuggestions}</span>
-              )}
-              {t === 'Upgrades' && pendingUpgrades > 0 && (
-                <span className="absolute -top-1 -right-1 bg-[#f59e0b] text-black text-xs w-4 h-4 rounded-full flex items-center justify-center">{pendingUpgrades}</span>
-              )}
-            </button>
-          ))}
+      <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4 md:space-y-6">
+        {/* Tabs — scroll horizontal en móvil */}
+        <div className="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0 pb-1">
+          <div className="flex gap-1 bg-[#101c35] rounded-xl p-1 w-max">
+            {TABS.map(t => (
+              <button key={t} onClick={() => setTab(t)}
+                className={`px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition-all relative whitespace-nowrap ${
+                  tab === t ? 'bg-[#8b5cf6] text-white' : 'text-slate-400 hover:text-slate-200'
+                }`}>
+                {t}
+                {t === 'Sugerencias' && newSuggestions > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center">{newSuggestions}</span>
+                )}
+                {t === 'Upgrades' && pendingUpgrades > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-[#f59e0b] text-black text-xs w-4 h-4 rounded-full flex items-center justify-center">{pendingUpgrades}</span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
 
         {loading ? (
@@ -420,7 +424,62 @@ export default function SuperAdmin() {
                 <div className="text-sm text-slate-400">{filteredBusinesses.length} negocios</div>
               </div>
 
-              <div className="bg-[#0c1424] border border-white/10 rounded-xl overflow-hidden">
+              {/* Mobile: cards / Desktop: tabla */}
+              <div className="md:hidden space-y-3">
+                {filteredBusinesses.map(b => {
+                  const bizUsers = allUsers.filter(u => u.businessId === b.id && u.role !== 'superadmin')
+                  const expires  = b.planExpiresAt ? (b.planExpiresAt?.toDate?.() || new Date(b.planExpiresAt)) : null
+                  return (
+                    <div key={b.id} className="bg-[#0c1424] border border-white/10 rounded-xl p-4 space-y-3"
+                      onClick={() => handleSelectBiz(b)}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-slate-200">{b.name}</div>
+                          <div className="text-xs text-slate-600 font-mono mt-0.5">{b.id.slice(0,12)}...</div>
+                        </div>
+                        <div className="flex gap-1.5 flex-wrap justify-end">
+                          <span className={`badge ${b.plan === 'pro' ? 'badge-green' : 'badge-gray'}`}>
+                            {b.plan === 'pro' ? '⚡ Pro' : 'Básico'}
+                          </span>
+                          <span className={`badge ${b.active !== false ? 'badge-green' : 'badge-red'}`}>
+                            {b.active !== false ? 'Activo' : 'Suspendido'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                        <div>📞 {b.phone || '—'}</div>
+                        <div>👥 {bizUsers.length} usuarios</div>
+                        {expires && <div>📅 Vence: {expires.toLocaleDateString('es-DO')}</div>}
+                        <div>🗓 {ts(b.createdAt?.seconds)}</div>
+                      </div>
+                      <div className="flex gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => changePlan(b, b.plan === 'pro' ? 'basic' : 'pro')}
+                          className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
+                            b.plan === 'pro'
+                              ? 'border-[#f59e0b]/20 text-[#f59e0b] hover:bg-[#f59e0b]/10'
+                              : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
+                          }`}>
+                          {b.plan === 'pro' ? '↓ Básico' : '↑ Pro'}
+                        </button>
+                        <button onClick={() => toggleBusiness(b)}
+                          className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
+                            b.active !== false
+                              ? 'border-red-500/20 text-red-400 hover:bg-red-500/10'
+                              : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
+                          }`}>
+                          {b.active !== false ? 'Suspender' : 'Activar'}
+                        </button>
+                        <button onClick={() => { setMsgModal(b); setMsgText('') }}
+                          className="flex-1 text-xs px-3 py-2 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
+                          ✉ Mensaje
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="hidden md:block bg-[#0c1424] border border-white/10 rounded-xl overflow-hidden">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-white/10">
@@ -495,7 +554,7 @@ export default function SuperAdmin() {
                   </div>
 
                   {/* Info básica */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
                     {[
                       { l: 'Plan', v: selectedBiz.plan === 'pro' ? '⚡ Pro' : 'Básico', c: selectedBiz.plan === 'pro' ? 'text-[#00e5a0]' : 'text-slate-300' },
                       { l: 'Empleados', v: allUsers.filter(u => u.businessId === selectedBiz.id).length, c: 'text-[#00c4e8]' },
@@ -566,7 +625,47 @@ export default function SuperAdmin() {
                 </div>
                 <div className="text-sm text-slate-400">{filteredUsers.length} usuarios</div>
               </div>
-              <div className="bg-[#0c1424] border border-white/10 rounded-xl overflow-hidden">
+              {/* Mobile: cards */}
+              <div className="md:hidden space-y-3">
+                {filteredUsers.map(u => {
+                  const biz = businesses.find(b => b.id === u.businessId)
+                  const ROLE_BADGE = { Administrador: 'badge-purple', Encargado: 'badge-blue', Cajero: 'badge-green' }
+                  return (
+                    <div key={u.id} className="bg-[#0c1424] border border-white/10 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-full bg-[#8b5cf6]/15 border border-[#8b5cf6]/20 flex items-center justify-center text-sm font-bold text-[#a78bfa] shrink-0">
+                            {(u.displayName || u.email || '?')[0].toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-200 text-sm truncate">{u.displayName || '—'}</div>
+                            <div className="text-xs text-slate-500 truncate">{u.email}</div>
+                          </div>
+                        </div>
+                        <div className="flex gap-1.5 shrink-0">
+                          <span className={`badge ${ROLE_BADGE[u.role] || 'badge-gray'}`}>{u.role}</span>
+                          <span className={`badge ${u.active ? 'badge-green' : 'badge-red'}`}>{u.active ? 'Activo' : 'Inactivo'}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-slate-500">
+                        <span>🏪 {biz?.name || '—'} · {ts(u.createdAt?.seconds)}</span>
+                        <button onClick={() => toggleUser(u)}
+                          className={`px-3 py-1.5 rounded-lg border transition-all ${
+                            u.active ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
+                          }`}>
+                          {u.active ? 'Desactivar' : 'Activar'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                {filteredUsers.length === 0 && (
+                  <div className="text-center text-slate-500 py-10">Sin usuarios</div>
+                )}
+              </div>
+
+              {/* Desktop: tabla */}
+              <div className="hidden md:block bg-[#0c1424] border border-white/10 rounded-xl overflow-hidden">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-white/10">
@@ -815,7 +914,7 @@ export default function SuperAdmin() {
                   {editingAnn ? '✏️ Editar anuncio' : 'Enviar anuncio a todos los negocios'}
                 </div>
                 <div className="alert-info text-xs">Los anuncios aparecen en el dashboard de todas las tiendas activas.</div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="label">Titulo *</label>
                     <input className="input"

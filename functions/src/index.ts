@@ -1,10 +1,13 @@
-import { onCall, HttpsError } from 'firebase-functions/v2/https'
-import { onDocumentDeleted, onDocumentUpdated } from 'firebase-functions/v2/firestore'
-import { onSchedule } from 'firebase-functions/v2/scheduler'
+import { defineSecret } from 'firebase-functions/params'
+import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https'
+import { onDocumentDeleted } from 'firebase-functions/v2/firestore'
 import * as admin from 'firebase-admin'
 
+const LEMON_SQUEEZY_API_KEY = defineSecret('LEMON_SQUEEZY_API_KEY')
+const LEMON_SQUEEZY_SIGNING_SECRET = defineSecret('LEMON_SQUEEZY_SIGNING_SECRET')
+
 admin.initializeApp()
-const db   = admin.firestore()
+const db = admin.firestore()
 const auth = admin.auth()
 
 // ── Validadores ───────────────────────────────────────────────
@@ -13,45 +16,6 @@ function validateEmail(email: string): boolean {
 }
 function validatePassword(pwd: string): boolean {
   return typeof pwd === 'string' && pwd.length >= 6
-}
-
-const BASIC_LIMITS = {
-  products:  25,
-  customers: 30,
-  users:     1,   // sin contar al admin
-}
-
-// ── Helper: degradar usuarios de un negocio ───────────────────
-// Desactiva los empleados que exceden el límite del plan básico.
-// Mantiene activo solo al primero (por fecha de creación) + el admin.
-async function enforceUserLimit(bizId: string) {
-  // Traer todos los usuarios sin filtros compuestos para evitar índices
-  const usersSnap = await db.collection(`businesses/${bizId}/users`).get()
-
-  // Filtrar y ordenar en código
-  const nonAdminUsers = usersSnap.docs
-    .filter(d => d.data().role !== 'Administrador' && !d.data().planLocked)
-    .sort((a, b) => {
-      const aDate = a.data().createdAt?.toDate?.() || new Date(0)
-      const bDate = b.data().createdAt?.toDate?.() || new Date(0)
-      return aDate.getTime() - bDate.getTime()
-    })
-
-  if (nonAdminUsers.length <= BASIC_LIMITS.users) return
-
-  const toBlock = nonAdminUsers.slice(BASIC_LIMITS.users)
-  const batch = db.batch()
-  const now = admin.firestore.FieldValue.serverTimestamp()
-
-  for (const doc of toBlock) {
-    const uid = doc.data().uid || doc.id
-    try { await auth.updateUser(uid, { disabled: true }) } catch {}
-    batch.update(doc.ref, { planLocked: true, active: false, updatedAt: now })
-    batch.update(db.doc(`users/${uid}`), { planLocked: true, active: false, updatedAt: now })
-  }
-
-  await batch.commit()
-  console.log(`[enforceUserLimit] ${bizId}: bloqueados ${toBlock.length} usuarios`)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -87,41 +51,41 @@ export const registerBusiness = onCall(
 
     try {
       const authUser = await auth.createUser({
-        email:       data.email.trim().toLowerCase(),
-        password:    data.password,
+        email: data.email.trim().toLowerCase(),
+        password: data.password,
         displayName: data.ownerName.trim(),
       })
       const uid = authUser.uid
 
-      const bizRef     = db.collection('businesses').doc()
+      const bizRef = db.collection('businesses').doc()
       const businessId = bizRef.id
 
       const defaultSettings = {
-        businessName:          data.businessName.trim(),
-        phone:                 data.phone?.trim()   || '',
-        address:               data.address?.trim() || '',
-        currency:              data.currency        || 'RD$',
-        taxRate:               18,
-        defaultPointsR50:      10,
-        defaultPointsR100:     20,
-        defaultPointsR150:     30,
+        businessName: data.businessName.trim(),
+        phone: data.phone?.trim() || '',
+        address: data.address?.trim() || '',
+        currency: data.currency || 'RD$',
+        taxRate: 18,
+        defaultPointsR50: 10,
+        defaultPointsR100: 20,
+        defaultPointsR150: 30,
         defaultBottleCapacity: 100,
-        lowStockThreshold:     5,
-        lowBottleAlert:        10,
-        invoiceHeader:         `VapePOS — ${data.businessName.trim()}`,
-        invoiceFooter:         '¡Gracias por su compra! Vuelva pronto.',
-        updatedAt:             now,
+        lowStockThreshold: 5,
+        lowBottleAlert: 10,
+        invoiceHeader: `VapePOS — ${data.businessName.trim()}`,
+        invoiceFooter: '¡Gracias por su compra! Vuelva pronto.',
+        updatedAt: now,
       }
 
       const batch = db.batch()
 
       batch.set(bizRef, {
-        name:      data.businessName.trim(),
-        phone:     data.phone?.trim()   || '',
-        address:   data.address?.trim() || '',
-        ownerId:   uid,
-        plan:      'basic',
-        active:    true,
+        name: data.businessName.trim(),
+        phone: data.phone?.trim() || '',
+        address: data.address?.trim() || '',
+        ownerId: uid,
+        plan: 'starter',
+        active: true,
         createdAt: now,
         updatedAt: now,
       })
@@ -130,43 +94,42 @@ export const registerBusiness = onCall(
 
       batch.set(db.doc(`users/${uid}`), {
         businessId,
-        role:        'Administrador',
-        active:      true,
-        email:       data.email.trim().toLowerCase(),
+        role: 'Administrador',
+        active: true,
+        email: data.email.trim().toLowerCase(),
         displayName: data.ownerName.trim(),
-        createdAt:   now,
-        updatedAt:   now,
+        createdAt: now,
+        updatedAt: now,
       })
 
       batch.set(db.doc(`businesses/${businessId}/users/${uid}`), {
         uid,
         businessId,
-        role:        'Administrador',
-        active:      true,
-        email:       data.email.trim().toLowerCase(),
+        role: 'Administrador',
+        active: true,
+        email: data.email.trim().toLowerCase(),
         displayName: data.ownerName.trim(),
-        createdAt:   now,
-        updatedAt:   now,
+        createdAt: now,
+        updatedAt: now,
       })
 
       await batch.commit()
 
       await db.collection(`businesses/${businessId}/audit_logs`).add({
-        action:     'REGISTER_BUSINESS',
-        module:     'system',
-        userId:     uid,
-        userName:   data.ownerName.trim(),
-        role:       'Administrador',
-        targetId:   businessId,
+        action: 'REGISTER_BUSINESS',
+        module: 'system',
+        userId: uid,
+        userName: data.ownerName.trim(),
+        role: 'Administrador',
+        targetId: businessId,
         targetName: data.businessName.trim(),
-        before:     null,
-        after:      { businessName: data.businessName.trim(), plan: 'basic' },
+        before: null,
+        after: { businessName: data.businessName.trim(), plan: 'starter' },
         businessId,
-        createdAt:  now,
+        createdAt: now,
       })
 
       return { success: true, businessId, uid }
-
     } catch (err: any) {
       if (err.code === 'auth/email-already-exists') {
         throw new HttpsError('already-exists', 'Ya existe una cuenta con ese correo.')
@@ -193,7 +156,7 @@ export const addEmployeeToStore = onCall(
       role: 'Cajero' | 'Encargado'
     }
 
-    const callerUid     = request.auth.uid
+    const callerUid = request.auth.uid
     const callerProfile = await db.doc(`users/${callerUid}`).get()
 
     if (!callerProfile.exists || callerProfile.data()?.role !== 'Administrador') {
@@ -219,8 +182,8 @@ export const addEmployeeToStore = onCall(
 
     try {
       const newUser = await auth.createUser({
-        email:       data.email.trim().toLowerCase(),
-        password:    data.password,
+        email: data.email.trim().toLowerCase(),
+        password: data.password,
         displayName: data.displayName.trim(),
       })
       const newUid = newUser.uid
@@ -229,29 +192,28 @@ export const addEmployeeToStore = onCall(
 
       batch.set(db.doc(`users/${newUid}`), {
         businessId,
-        role:        data.role,
-        active:      true,
-        email:       data.email.trim().toLowerCase(),
+        role: data.role,
+        active: true,
+        email: data.email.trim().toLowerCase(),
         displayName: data.displayName.trim(),
-        createdAt:   now,
-        updatedAt:   now,
+        createdAt: now,
+        updatedAt: now,
       })
 
       batch.set(db.doc(`businesses/${businessId}/users/${newUid}`), {
-        uid:         newUid,
+        uid: newUid,
         businessId,
-        role:        data.role,
-        active:      true,
-        email:       data.email.trim().toLowerCase(),
+        role: data.role,
+        active: true,
+        email: data.email.trim().toLowerCase(),
         displayName: data.displayName.trim(),
-        createdAt:   now,
-        updatedAt:   now,
+        createdAt: now,
+        updatedAt: now,
       })
 
       await batch.commit()
 
       return { success: true, uid: newUid }
-
     } catch (err: any) {
       if (err.code === 'auth/email-already-exists') {
         throw new HttpsError('already-exists', 'Ya existe una cuenta con ese correo.')
@@ -273,7 +235,7 @@ export const updateUserRole = onCall(
 
     const data = request.data as { targetUid: string; newRole: string }
 
-    const callerUid     = request.auth.uid
+    const callerUid = request.auth.uid
     const callerProfile = await db.doc(`users/${callerUid}`).get()
 
     if (!callerProfile.exists || callerProfile.data()?.role !== 'Administrador') {
@@ -316,7 +278,7 @@ export const deactivateUser = onCall(
 
     const data = request.data as { targetUid: string }
 
-    const callerUid     = request.auth.uid
+    const callerUid = request.auth.uid
     const callerProfile = await db.doc(`users/${callerUid}`).get()
 
     if (!callerProfile.exists || callerProfile.data()?.role !== 'Administrador') {
@@ -349,31 +311,31 @@ export const deactivateUser = onCall(
 // ══════════════════════════════════════════════════════════════
 export const auditOnSaleDelete = onDocumentDeleted(
   {
-    document:  'businesses/{businessId}/sales/{saleId}',
-    region:    'us-central1',
+    document: 'businesses/{businessId}/sales/{saleId}',
+    region: 'us-central1',
   },
   async (event) => {
     const { businessId, saleId } = event.params
     const deletedSale = event.data?.data()
 
     await db.collection(`businesses/${businessId}/audit_logs`).add({
-      action:     'DELETE_SALE',
-      module:     'sales',
-      userId:     deletedSale?.userId || 'unknown',
-      userName:   'Sistema (trigger)',
-      role:       'system',
-      targetId:   saleId,
+      action: 'DELETE_SALE',
+      module: 'sales',
+      userId: deletedSale?.userId || 'unknown',
+      userName: 'Sistema (trigger)',
+      role: 'system',
+      targetId: saleId,
       targetName: deletedSale?.saleNumber || saleId,
-      before:     deletedSale || null,
-      after:      null,
+      before: deletedSale || null,
+      after: null,
       businessId,
-      createdAt:  admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     })
   }
 )
 
 // ══════════════════════════════════════════════════════════════
-// 6. deleteUser
+// 6. deleteUser — Admin elimina un usuario completamente
 // ══════════════════════════════════════════════════════════════
 export const deleteUser = onCall(
   { region: 'us-central1' },
@@ -383,7 +345,7 @@ export const deleteUser = onCall(
     }
 
     const data = request.data as { targetUid: string }
-    const callerUid     = request.auth.uid
+    const callerUid = request.auth.uid
     const callerProfile = await db.doc(`users/${callerUid}`).get()
 
     if (!callerProfile.exists || callerProfile.data()?.role !== 'Administrador') {
@@ -408,17 +370,17 @@ export const deleteUser = onCall(
     await db.doc(`businesses/${businessId}/users/${data.targetUid}`).delete()
 
     await db.collection(`businesses/${businessId}/audit_logs`).add({
-      action:     'DELETE_USER',
-      module:     'users',
-      userId:     callerUid,
-      userName:   callerProfile.data()?.displayName || 'Admin',
-      role:       'Administrador',
-      targetId:   data.targetUid,
+      action: 'DELETE_USER',
+      module: 'users',
+      userId: callerUid,
+      userName: callerProfile.data()?.displayName || 'Admin',
+      role: 'Administrador',
+      targetId: data.targetUid,
       targetName: targetProfile.data()?.displayName || data.targetUid,
-      before:     { role: targetProfile.data()?.role, email: targetProfile.data()?.email },
-      after:      null,
+      before: { role: targetProfile.data()?.role, email: targetProfile.data()?.email },
+      after: null,
       businessId,
-      createdAt:  now,
+      createdAt: now,
     })
 
     return { success: true }
@@ -426,277 +388,217 @@ export const deleteUser = onCall(
 )
 
 // ══════════════════════════════════════════════════════════════
-// 7. onBusinessPlanChange — TRIGGER AUTOMÁTICO
+// 7. lemonSqueezyWebhook
 // ══════════════════════════════════════════════════════════════
-// Se dispara cada vez que se actualiza el documento del negocio.
-// Si el plan cambió de 'pro' a 'basic', aplica los límites
-// inmediatamente sin esperar al scheduler nocturno.
-// ══════════════════════════════════════════════════════════════
-export const onBusinessPlanChange = onDocumentUpdated(
+export const lemonSqueezyWebhook = onRequest(
   {
-    document: 'businesses/{businessId}',
-    region:   'us-central1',
+    region: 'us-central1',
+    secrets: [LEMON_SQUEEZY_SIGNING_SECRET],
   },
-  async (event) => {
-    const before = event.data?.before.data()
-    const after  = event.data?.after.data()
-    const bizId  = event.params.businessId
-
-    // Solo actuar si el plan bajó de pro a basic
-    const planDowngraded = before?.plan === 'pro' && after?.plan === 'basic'
-    if (!planDowngraded) return
-
-    console.log(`[onBusinessPlanChange] Plan degradado a basic para ${bizId}`)
-
-    const now   = admin.firestore.FieldValue.serverTimestamp()
-    const batch = db.batch()
-
-    // ── Bloquear productos extra ──────────────────────────
-    const productsSnap = await db.collection(`businesses/${bizId}/products`)
-      .where('active', '==', true)
-      .orderBy('createdAt', 'asc')
-      .get()
-
-    if (productsSnap.docs.length > BASIC_LIMITS.products) {
-      const toBlock = productsSnap.docs.slice(BASIC_LIMITS.products)
-      for (const doc of toBlock) {
-        batch.update(doc.ref, { planLocked: true, updatedAt: now })
+  async (req, res) => {
+    try {
+      if (req.method !== 'POST') {
+        res.status(405).send('Method Not Allowed')
+        return
       }
-      console.log(`[onBusinessPlanChange] ${bizId}: bloqueados ${toBlock.length} productos`)
-    }
 
-    // ── Bloquear clientes extra ───────────────────────────
-    const customersSnap = await db.collection(`businesses/${bizId}/customers`)
-      .orderBy('createdAt', 'asc')
-      .get()
+      const signingSecret = LEMON_SQUEEZY_SIGNING_SECRET.value()
+      const signature = req.headers['x-signature'] as string | undefined
 
-    if (customersSnap.docs.length > BASIC_LIMITS.customers) {
-      const toBlock = customersSnap.docs.slice(BASIC_LIMITS.customers)
-      for (const doc of toBlock) {
-        batch.update(doc.ref, { planLocked: true, updatedAt: now })
+      if (!signature) {
+        res.status(400).send('Falta firma')
+        return
       }
-      console.log(`[onBusinessPlanChange] ${bizId}: bloqueados ${toBlock.length} clientes`)
+
+      const crypto = require('crypto')
+
+      const expectedSignature = crypto
+        .createHmac('sha256', signingSecret)
+        .update(req.rawBody)
+        .digest('hex')
+
+      if (signature !== expectedSignature) {
+        res.status(403).send('Firma inválida')
+        return
+      }
+
+      const eventName = req.body?.meta?.event_name
+      const customData = req.body?.meta?.custom_data || {}
+      const attributes = req.body?.data?.attributes || {}
+      const subscriptionId = req.body?.data?.id || null
+
+      const businessId = customData.businessId
+
+      if (!businessId) {
+        res.status(200).send('OK')
+        return
+      }
+
+      const now = new Date()
+      const ts = admin.firestore.FieldValue.serverTimestamp()
+
+      if (eventName === 'subscription_created' || eventName === 'subscription_updated') {
+        let planExpiresAt: Date | null = null
+
+        if (attributes.renews_at) {
+          planExpiresAt = new Date(attributes.renews_at)
+        } else if (attributes.ends_at) {
+          planExpiresAt = new Date(attributes.ends_at)
+        } else {
+          planExpiresAt = new Date(now)
+          planExpiresAt.setDate(planExpiresAt.getDate() + 30)
+        }
+
+        await db.doc(`businesses/${businessId}`).set(
+          {
+            plan: 'pro',
+            planActivatedAt: now,
+            planExpiresAt,
+            degradedAt: null,
+            lemonSqueezy: {
+              status: attributes.status || 'active',
+              renewsAt: attributes.renews_at ? new Date(attributes.renews_at) : null,
+              endsAt: attributes.ends_at ? new Date(attributes.ends_at) : null,
+              subscriptionId,
+              customerId: attributes.customer_id || null,
+              variantId: attributes.variant_id || null,
+              productId: attributes.product_id || null,
+              orderId: attributes.order_id || null,
+              updatedAt: ts,
+            },
+            updatedAt: ts,
+          },
+          { merge: true }
+        )
+      }
+
+      if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
+        await db.doc(`businesses/${businessId}`).set(
+          {
+            plan: 'starter',
+            planExpiresAt: attributes.ends_at ? new Date(attributes.ends_at) : null,
+            degradedAt: now,
+            lemonSqueezy: {
+              status: 'inactive',
+              renewsAt: null,
+              endsAt: attributes.ends_at ? new Date(attributes.ends_at) : null,
+              subscriptionId,
+              customerId: attributes.customer_id || null,
+              variantId: attributes.variant_id || null,
+              productId: attributes.product_id || null,
+              orderId: attributes.order_id || null,
+              updatedAt: ts,
+            },
+            updatedAt: ts,
+          },
+          { merge: true }
+        )
+      }
+
+      res.status(200).send('OK')
+    } catch (error) {
+      console.error('Error en webhook Lemon Squeezy:', error)
+      res.status(500).send('Error')
     }
-
-    await batch.commit()
-
-    // ── Bloquear usuarios extra (fuera del batch por auth.updateUser) ──
-    await enforceUserLimit(bizId)
-
-    // Audit log
-    await db.collection(`businesses/${bizId}/audit_logs`).add({
-      action:     'PLAN_DOWNGRADED',
-      module:     'system',
-      userId:     'system',
-      userName:   'Sistema automático',
-      role:       'system',
-      targetId:   bizId,
-      targetName: after?.name || bizId,
-      before:     { plan: 'pro' },
-      after:      { plan: 'basic' },
-      businessId: bizId,
-      createdAt:  now,
-    })
   }
 )
 
 // ══════════════════════════════════════════════════════════════
-// 8. degradeExpiredPlans — Scheduler nocturno (2am)
+// 8. createLemonSqueezyCheckout
 // ══════════════════════════════════════════════════════════════
-const GRACE_PERIOD_DAYS = 3
+export const createLemonSqueezyCheckout = onCall(
+  {
+    region: 'us-central1',
+    secrets: [LEMON_SQUEEZY_API_KEY],
+  },
+  async (request) => {
+    try {
+      const authUser = request.auth
+      if (!authUser) {
+        throw new HttpsError('unauthenticated', 'Debes iniciar sesión')
+      }
 
-export const degradeExpiredPlans = onSchedule(
-  { schedule: '0 2 * * *', region: 'us-central1', timeZone: 'America/Santo_Domingo' },
-  async () => {
-    const now     = new Date()
-    const bizSnap = await db.collection('businesses').where('plan', '==', 'pro').get()
+      const { businessId, email } = request.data || {}
 
-    for (const bizDoc of bizSnap.docs) {
-      const biz     = bizDoc.data()
-      const bizId   = bizDoc.id
-      const expires = biz.planExpiresAt?.toDate?.()
-      if (!expires) continue
+      if (!businessId) {
+        throw new HttpsError('invalid-argument', 'Falta businessId')
+      }
 
-      const diffDays = Math.floor((now.getTime() - expires.getTime()) / (1000 * 60 * 60 * 24))
-      if (diffDays <= GRACE_PERIOD_DAYS) continue
+      const apiKey = LEMON_SQUEEZY_API_KEY.value()
+      const storeId = 324232
+      const variantId = 1437338
 
-      console.log(`[degradePlan] Degradando ${bizId} — vencido hace ${diffDays} días`)
+      console.log('CHECKOUT DEBUG 1')
+      console.log(JSON.stringify({
+        apiKeyExiste: !!apiKey,
+        storeId,
+        variantId,
+        businessId,
+        email: email || null,
+      }))
 
-      const batch = db.batch()
-
-      // Cambiar plan a basic (esto dispara onBusinessPlanChange automáticamente)
-      batch.update(db.doc(`businesses/${bizId}`), {
-        plan:       'basic',
-        degradedAt: now,
-        updatedAt:  admin.firestore.FieldValue.serverTimestamp(),
+      const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/vnd.api+json',
+          'Content-Type': 'application/vnd.api+json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          data: {
+            type: 'checkouts',
+            attributes: {
+              checkout_data: {
+                email: email || undefined,
+                custom: {
+                  businessId,
+                },
+              },
+            },
+            relationships: {
+              store: {
+                data: {
+                  type: 'stores',
+                  id: String(storeId),
+                },
+              },
+              variant: {
+                data: {
+                  type: 'variants',
+                  id: String(variantId),
+                },
+              },
+            },
+          },
+        }),
       })
 
-      await batch.commit()
-      // onBusinessPlanChange se encarga del resto (productos, clientes, usuarios)
-    }
+      const json = await response.json()
 
-    console.log(`[degradePlan] Completado — revisados ${bizSnap.docs.length} negocios Pro`)
-  }
-)
+      console.log('CHECKOUT DEBUG 2')
+      console.log(JSON.stringify({
+        ok: response.ok,
+        status: response.status,
+        json,
+      }))
 
-// ══════════════════════════════════════════════════════════════
-// 9. reactivatePlan — SuperAdmin aprueba upgrade
-// ══════════════════════════════════════════════════════════════
-export const reactivatePlan = onCall(
-  { region: 'us-central1' },
-  async (request) => {
-    if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
-    const callerProfile = await db.doc(`users/${request.auth.uid}`).get()
-    if (callerProfile.data()?.role !== 'superadmin') {
-      throw new HttpsError('permission-denied', 'Solo el superadmin puede reactivar planes.')
-    }
-
-    const { businessId } = request.data as { businessId: string }
-    const now = new Date()
-    const expiresAt = new Date(now)
-    expiresAt.setDate(expiresAt.getDate() + 30)
-
-    const batch = db.batch()
-
-    batch.update(db.doc(`businesses/${businessId}`), {
-      plan:            'pro',
-      planExpiresAt:   expiresAt,
-      planActivatedAt: now,
-      degradedAt:      null,
-      updatedAt:       admin.firestore.FieldValue.serverTimestamp(),
-    })
-
-    // Desbloquear productos
-    const productsSnap = await db.collection(`businesses/${businessId}/products`)
-      .where('planLocked', '==', true).get()
-    for (const doc of productsSnap.docs) {
-      batch.update(doc.ref, { planLocked: false, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-    }
-
-    // Desbloquear clientes
-    const customersSnap = await db.collection(`businesses/${businessId}/customers`)
-      .where('planLocked', '==', true).get()
-    for (const doc of customersSnap.docs) {
-      batch.update(doc.ref, { planLocked: false, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-    }
-
-    // Desbloquear y reactivar usuarios — sin filtro para asegurar que los encuentra
-    const allUsersSnap = await db.collection(`businesses/${businessId}/users`).get()
-    const lockedUsers  = allUsersSnap.docs.filter(d => d.data().planLocked === true)
-
-    console.log(`[reactivatePlan] Usuarios totales: ${allUsersSnap.docs.length}, bloqueados: ${lockedUsers.length}`)
-
-    for (const doc of lockedUsers) {
-      const uid = doc.data().uid || doc.id
-      console.log(`[reactivatePlan] Desbloqueando uid: ${uid}`)
-      try {
-        await auth.updateUser(uid, { disabled: false })
-        console.log(`[reactivatePlan] Auth habilitado para ${uid}`)
-      } catch (e: any) {
-        console.warn(`[reactivatePlan] Auth falló para ${uid}:`, e.message)
+      if (!response.ok) {
+        throw new HttpsError(
+          'internal',
+          json?.errors?.[0]?.detail || 'No se pudo crear el checkout'
+        )
       }
-      batch.update(doc.ref, { planLocked: false, active: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-      batch.update(db.doc(`users/${uid}`), { planLocked: false, active: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-    }
 
-    await batch.commit()
+      const checkoutUrl = json?.data?.attributes?.url
 
-    console.log(`[reactivatePlan] Plan Pro reactivado para ${businessId} — ${lockedUsers.length} usuarios desbloqueados`)
-    return { success: true, expiresAt, usersUnlocked: lockedUsers.length }
-  }
-)
-
-// ══════════════════════════════════════════════════════════════
-// 10. activateTrial — Activa prueba gratuita de 21 días
-// Reemplaza el updateDoc directo del cliente para garantizar
-// que los usuarios bloqueados se reactiven correctamente.
-// ══════════════════════════════════════════════════════════════
-export const activateTrial = onCall(
-  { region: 'us-central1' },
-  async (request) => {
-    if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
-
-    const callerUid     = request.auth.uid
-    const callerProfile = await db.doc(`users/${callerUid}`).get()
-
-    if (!callerProfile.exists) {
-      throw new HttpsError('not-found', 'Usuario no encontrado.')
-    }
-    if (callerProfile.data()?.role !== 'Administrador') {
-      throw new HttpsError('permission-denied', 'Solo el administrador puede activar la prueba.')
-    }
-
-    const businessId = callerProfile.data()?.businessId
-    if (!businessId) throw new HttpsError('failed-precondition', 'Negocio no encontrado.')
-
-    // Verificar que no haya usado la prueba antes
-    const bizDoc = await db.doc(`businesses/${businessId}`).get()
-    if (!bizDoc.exists) throw new HttpsError('not-found', 'Negocio no encontrado.')
-    if (bizDoc.data()?.trialUsed === true) {
-      throw new HttpsError('failed-precondition', 'Ya usaste tu prueba gratuita.')
-    }
-
-    const now       = new Date()
-    const expiresAt = new Date(now)
-    expiresAt.setDate(expiresAt.getDate() + 21)
-    const ts = admin.firestore.FieldValue.serverTimestamp()
-
-    const batch = db.batch()
-
-    // 1. Actualizar plan del negocio
-    batch.update(db.doc(`businesses/${businessId}`), {
-      plan:            'pro',
-      planExpiresAt:   expiresAt,
-      planActivatedAt: now,
-      trialUsed:       true,
-      trialStartedAt:  now,
-      updatedAt:       ts,
-    })
-
-    // 2. Desbloquear productos
-    const productsSnap = await db.collection(`businesses/${businessId}/products`)
-      .where('planLocked', '==', true).get()
-    for (const doc of productsSnap.docs) {
-      batch.update(doc.ref, { planLocked: false, updatedAt: ts })
-    }
-
-    // 3. Desbloquear clientes
-    const customersSnap = await db.collection(`businesses/${businessId}/customers`)
-      .where('planLocked', '==', true).get()
-    for (const doc of customersSnap.docs) {
-      batch.update(doc.ref, { planLocked: false, updatedAt: ts })
-    }
-
-    // 4. Desbloquear usuarios
-    const allUsersSnap = await db.collection(`businesses/${businessId}/users`).get()
-    const lockedUsers  = allUsersSnap.docs.filter(d => d.data().planLocked === true)
-
-    for (const doc of lockedUsers) {
-      const uid = doc.data().uid || doc.id
-      try { await auth.updateUser(uid, { disabled: false }) } catch (e: any) {
-        console.warn(`[activateTrial] Auth falló para ${uid}:`, e.message)
+      if (!checkoutUrl) {
+        throw new HttpsError('internal', 'Lemon Squeezy no devolvió URL')
       }
-      batch.update(doc.ref, { planLocked: false, active: true, updatedAt: ts })
-      batch.update(db.doc(`users/${uid}`), { planLocked: false, active: true, updatedAt: ts })
+
+      return { url: checkoutUrl }
+    } catch (error: any) {
+      console.error('CHECKOUT ERROR', error)
+      throw new HttpsError('internal', error?.message || 'Error interno creando checkout')
     }
-
-    await batch.commit()
-
-    // 5. Audit log
-    await db.collection(`businesses/${businessId}/audit_logs`).add({
-      action:     'TRIAL_ACTIVATED',
-      module:     'system',
-      userId:     callerUid,
-      userName:   callerProfile.data()?.displayName || 'Admin',
-      role:       'Administrador',
-      targetId:   businessId,
-      before:     { plan: bizDoc.data()?.plan || 'basic' },
-      after:      { plan: 'pro', trial: true, expiresAt },
-      businessId,
-      createdAt:  ts,
-    })
-
-    console.log(`[activateTrial] Trial activado para ${businessId} — ${lockedUsers.length} usuarios desbloqueados`)
-    return { success: true, expiresAt, usersUnlocked: lockedUsers.length }
   }
 )

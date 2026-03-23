@@ -44,6 +44,7 @@ export default function UpgradeModal({ onClose }) {
   const [preview, setPreview]         = useState(null)
   const [notes, setNotes]             = useState('')
   const [copied, setCopied]           = useState(null)
+  const [creatingCheckout, setCreatingCheckout] = useState(false)
 
   const handleCopy = (text, key) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -81,6 +82,36 @@ export default function UpgradeModal({ onClose }) {
       toast.error('Error al activar la prueba: ' + err.message)
     } finally {
       setActivating(false)
+    }
+  }
+    // ── Pago automático con Lemon Squeezy ───────────────────────
+  const handleAutomaticCheckout = async () => {
+    if (!businessId) {
+      toast.error('No se encontró el negocio')
+      return
+    }
+
+    setCreatingCheckout(true)
+    try {
+      const fns = getFunctions()
+      const fn = httpsCallable(fns, 'createLemonSqueezyCheckout')
+
+      const result = await fn({
+        businessId,
+        email: currentUser?.email || '',
+      })
+
+      const checkoutUrl = result?.data?.url
+
+      if (!checkoutUrl) {
+        throw new Error('No se recibió la URL del checkout')
+      }
+
+      window.location.href = checkoutUrl
+    } catch (err) {
+      toast.error('No se pudo abrir el checkout: ' + (err.message || 'Error desconocido'))
+    } finally {
+      setCreatingCheckout(false)
     }
   }
 
@@ -150,6 +181,24 @@ export default function UpgradeModal({ onClose }) {
             </div>
           </div>
 
+          {/* Pago automático */}
+          <div className="bg-[#00e5a0]/10 border border-[#00e5a0]/20 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-lg">💳</span>
+              <div className="font-semibold text-[#00e5a0] text-sm">Pago automático recomendado</div>
+            </div>
+            <div className="text-xs text-slate-400 mb-3">
+              Paga al instante con tarjeta y tu plan Pro se activa automáticamente al momento.
+            </div>
+            <button
+              onClick={handleAutomaticCheckout}
+              disabled={creatingCheckout}
+              className="w-full py-2.5 rounded-xl font-bold text-sm bg-[#00e5a0]/20 border border-[#00e5a0]/30 text-[#00e5a0] hover:bg-[#00e5a0]/30 transition-all disabled:opacity-60"
+            >
+              {creatingCheckout ? 'Abriendo checkout...' : '💳 Pagar ahora con tarjeta'}
+            </button>
+          </div>
+
           {/* Prueba gratuita */}
           {!trialUsed && !isPro && (
             <div className="bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 rounded-xl p-4">
@@ -181,8 +230,8 @@ export default function UpgradeModal({ onClose }) {
           {/* Datos de pago */}
           <div className="space-y-2">
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Realiza una transferencia por <span className="text-[#00e5a0]">RD$600</span> a:
-            </div>
+  O si prefieres, realiza una transferencia por <span className="text-[#00e5a0]">RD$600</span> a:
+</div>
             {PAYMENT_INFO.map((bank, bi) => (
               <div key={bi} className="bg-[#101c35] rounded-xl p-4">
                 <div className={`text-xs font-bold ${bank.color} mb-2`}>{bank.icon} {bank.bank}</div>
@@ -208,7 +257,7 @@ export default function UpgradeModal({ onClose }) {
               </div>
             ))}
             <div className="text-xs text-slate-500 text-center pt-1">
-              Verificamos el pago en menos de 24 horas hábiles.
+              Esta opción manual se verifica en menos de 24 horas hábiles.
             </div>
           </div>
 
