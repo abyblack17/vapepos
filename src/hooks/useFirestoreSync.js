@@ -134,6 +134,7 @@ export function useFirestoreSync(businessId) {
           if (session?.id) {
             await bizUpdate(businessId, 'cash_sessions', session.id, {
               sales: newState.cashSession.sales,
+              salePayments: newState.cashSession.salePayments || 0,
             })
           }
           break
@@ -165,19 +166,52 @@ export function useFirestoreSync(businessId) {
           // Update cash session
           const session = newState.cashSession
           if (session?.id) {
-            await bizUpdate(businessId, 'cash_sessions', session.id, { sales: session.sales })
+            await bizUpdate(businessId, 'cash_sessions', session.id, {
+              sales: session.sales,
+              salePayments: session.salePayments || 0,
+            })
           }
-          // Revert customer stats in Firestore
-          if (action._sale?.customerId) {
-            const customer = newState.customers.find(c => c.id === action._sale.customerId)
-            if (customer) {
-              await bizUpdate(businessId, 'customers', customer.id, {
-                totalSpent:        customer.totalSpent,
-                totalTransactions: customer.totalTransactions,
-                creditBalance:     customer.creditBalance,
-              })
-            }
+          // Recalcular y persistir métricas de clientes después de borrar una venta.
+          // Esto evita que recargas/puntos se queden pegados cuando se eliminan facturas.
+          const customersToUpdate = action._sale?.customerId
+            ? newState.customers.filter(c => c.id === action._sale.customerId)
+            : newState.customers
+          for (const customer of customersToUpdate) {
+            await bizUpdate(businessId, 'customers', customer.id, {
+              totalSpent:        customer.totalSpent || 0,
+              totalTransactions: customer.totalTransactions || 0,
+              creditBalance:     customer.creditBalance || 0,
+              refillRewards:     customer.refillRewards || 0,
+              totalRefills:      customer.totalRefills || 0,
+              rewardPoints:      customer.rewardPoints || 0,
+              lastPurchase:      customer.lastPurchase || null,
+            })
           }
+          break
+        }
+
+        // ════════════════════════════════════════════════════
+        // FISCAL / NCF
+        // ════════════════════════════════════════════════════
+        case 'UPDATE_FISCAL_CONFIG': {
+          await bizSet(businessId, 'fiscalConfig', 'config', action.payload)
+          break
+        }
+        case 'ADD_NCF_SEQUENCE':
+        case 'UPDATE_NCF_SEQUENCE': {
+          const { id, ...data } = action.payload
+          await bizSet(businessId, 'ncfSequences', id, data)
+          break
+        }
+        case 'DELETE_NCF_SEQUENCE':
+          await bizDelete(businessId, 'ncfSequences', action.payload)
+          break
+        case 'ADD_FISCAL_INVOICE': {
+          const { id, ...data } = action.payload
+          await bizSet(businessId, 'fiscalInvoices', id, {
+            ...data,
+            createdAt: serverTimestamp(),
+          })
           break
         }
 
@@ -239,6 +273,7 @@ export function useFirestoreSync(businessId) {
               open:      false,
               closeTime: new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }),
               sales:     session.sales,
+              salePayments: session.salePayments || 0,
               expenses:  session.expenses,
             })
           }
@@ -255,14 +290,22 @@ export function useFirestoreSync(businessId) {
           }
           break
         }
-        case 'UPDATE_CASH_SALES': {
-          // Triggered when credit payment is received
+        case 'UPDATE_CASH_SALES':
+        case 'EDIT_CREDIT_PAYMENT':
+        case 'DELETE_CREDIT_PAYMENT': {
+          // Triggered when credit payment is created, edited or deleted
           const session = newState.cashSession
           if (session?.id) {
             await bizUpdate(businessId, 'cash_sessions', session.id, {
               sales:       session.sales,
+              salePayments: session.salePayments || 0,
               creditPayments: session.creditPayments || [],
             })
+          }
+          const affectedCustomerId = action.payload?.customerId || action._customerId
+          const affected = affectedCustomerId ? newState.customers.filter(c => c.id === affectedCustomerId) : newState.customers
+          for (const customer of affected) {
+            if (customer?.id) await bizUpdate(businessId, 'customers', customer.id, { creditBalance: customer.creditBalance || 0 })
           }
           break
         }

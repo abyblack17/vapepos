@@ -5,9 +5,11 @@ import Modal from '../components/ui/Modal'
 import ProGate from '../components/ui/ProGate'
 import UpgradeModal from '../components/ui/UpgradeModal'
 import { fmt, genId, categoryBadge } from '../utils/helpers'
+import { findExistingByNameOrCode, hasDuplicateName, makeProductSku } from '../utils/recordGuards'
 import { bizAdd, bizSet, bizUpdate, bizDelete } from '../services/firestoreService'
 import { uploadProductImage } from '../services/storageService'
 import { exportInventory } from '../services/exportService'
+import ExcelDataActions from '../components/common/ExcelDataActions'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 
@@ -19,6 +21,7 @@ export default function Inventory() {
   const [catFilter, setCatFilter] = useState('Todos')
   const [modal, setModal]     = useState(null)
   const [showUpgrade, setShowUpgrade] = useState(false)
+  const [savingProduct, setSavingProduct] = useState(false)
 
   // Separar productos activos de los bloqueados por plan
   const allActive      = state.products.filter(p => p.active)
@@ -33,38 +36,65 @@ export default function Inventory() {
   })
 
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length
+  const inventoryCostValue = products.reduce((a, p) => a + ((parseFloat(p.cost) || 0) * (parseInt(p.stock) || 0)), 0)
+  const inventorySaleValue = products.reduce((a, p) => a + ((parseFloat(p.price) || 0) * (parseInt(p.stock) || 0)), 0)
   const productUsage  = usage('products')
   const canAddProduct = canAdd('products')
   const canExport     = hasFeature('exportInventory')
 
   const handleSave = async (data, isEdit) => {
+    if (savingProduct) return
     if (!isEdit && !canAddProduct) {
       setShowUpgrade(true)
       return
     }
-    if (isEdit) {
-      const fields = { ...data, price: parseFloat(data.price), cost: parseFloat(data.cost), stock: parseInt(data.stock), minStock: parseInt(data.minStock), active: true }
-      dispatch({ type: 'UPDATE_PRODUCT', payload: { id: data.id, ...fields } })
-      if (businessId) {
-        const ok = await bizUpdate(businessId, 'products', data.id, fields)
-        if (!ok) await bizSet(businessId, 'products', data.id, fields)
-      }
-      toast.success('Producto actualizado')
-    } else {
-      const productData = { ...data, price: parseFloat(data.price), cost: parseFloat(data.cost), stock: parseInt(data.stock), minStock: parseInt(data.minStock), active: true }
-      if (businessId) {
-        const saved = await bizAdd(businessId, 'products', productData)
-        if (saved?.id) {
-          dispatch({ type: 'ADD_PRODUCT', payload: { ...productData, id: saved.id } })
-          toast.success(`"${data.name}" agregado al inventario`)
-          setModal(null)
-          return
-        }
-      }
-      dispatch({ type: 'ADD_PRODUCT', payload: { ...productData, id: genId('p') } })
-      toast.success(`"${data.name}" agregado al inventario`)
+
+    const name = data.name?.trim()
+    if (!name) { toast.error('Nombre requerido'); return }
+    if (hasDuplicateName(state.products, name, isEdit ? data.id : null)) {
+      toast.error(`Ya existe un producto llamado "${name}"`)
+      return
     }
-    setModal(null)
+
+    const productData = {
+      ...data,
+      name,
+      sku: data.sku?.trim() || makeProductSku(state.products),
+      price: parseFloat(data.price) || 0,
+      cost: parseFloat(data.cost) || 0,
+      stock: parseInt(data.stock) || 0,
+      minStock: parseInt(data.minStock) || 0,
+      taxIncluded: data.taxIncluded === true,
+      active: true,
+    }
+
+    setSavingProduct(true)
+    try {
+      if (isEdit) {
+        const fields = { ...productData }
+        dispatch({ type: 'UPDATE_PRODUCT', payload: { id: data.id, ...fields } })
+        if (businessId) {
+          const ok = await bizUpdate(businessId, 'products', data.id, fields)
+          if (!ok) await bizSet(businessId, 'products', data.id, fields)
+        }
+        toast.success('Producto actualizado')
+      } else {
+        if (businessId) {
+          const saved = await bizAdd(businessId, 'products', productData)
+          if (saved?.id) {
+            dispatch({ type: 'ADD_PRODUCT', payload: { ...productData, id: saved.id } })
+            toast.success(`"${name}" agregado al inventario`)
+            setModal(null)
+            return
+          }
+        }
+        dispatch({ type: 'ADD_PRODUCT', payload: { ...productData, id: genId('p') } })
+        toast.success(`"${name}" agregado al inventario`)
+      }
+      setModal(null)
+    } finally {
+      setSavingProduct(false)
+    }
   }
 
   const handleDelete = async (product) => {
@@ -77,6 +107,35 @@ export default function Inventory() {
   const handleNewProduct = () => {
     if (!canAddProduct) { setShowUpgrade(true); return }
     setModal({ type: 'new' })
+  }
+
+  const handleImportProducts = async (rows) => {
+    let imported = 0
+    let skipped = 0
+    const working = [...state.products]
+    for (const row of rows) {
+      if (!row.name?.trim()) { skipped += 1; continue }
+      const existing = findExistingByNameOrCode(working, row, 'sku')
+      const id = existing?.id || row.id || genId('p')
+      const payload = {
+        ...existing,
+        ...row,
+        id,
+        name: row.name.trim(),
+        sku: row.sku?.trim() || existing?.sku || makeProductSku(working),
+        active: row.active !== false,
+      }
+      dispatch({ type: existing ? 'UPDATE_PRODUCT' : 'ADD_PRODUCT', payload })
+      const pos = working.findIndex(p => p.id === id)
+      if (pos >= 0) working[pos] = payload
+      else working.push(payload)
+      if (businessId) {
+        const { id: productId, ...data } = payload
+        await bizSet(businessId, 'products', productId, data)
+      }
+      imported += 1
+    }
+    toast.success(`${imported} producto(s) importado(s)/actualizado(s)${skipped ? `, ${skipped} omitido(s)` : ''}`)
   }
 
   return (
@@ -114,8 +173,12 @@ export default function Inventory() {
           </div>
         )}
         <div className="card px-4 py-2.5 flex items-center gap-2">
-          <span className="text-[#00c4e8] font-bold font-mono text-sm">{fmt(products.reduce((a, p) => a + p.cost * p.stock, 0))}</span>
+          <span className="text-[#00c4e8] font-bold font-mono text-sm">{fmt(inventoryCostValue)}</span>
           <span className="text-xs text-slate-400">valor en inventario</span>
+        </div>
+        <div className="card px-4 py-2.5 flex items-center gap-2">
+          <span className="text-[#00e5a0] font-bold font-mono text-sm">{fmt(inventorySaleValue)}</span>
+          <span className="text-xs text-slate-400">valor total de venta</span>
         </div>
         {lockedProducts.length > 0 && (
           <div className="card px-4 py-2.5 flex items-center gap-2 border-[#f59e0b]/20 cursor-pointer" onClick={() => setShowUpgrade(true)}>
@@ -143,12 +206,13 @@ export default function Inventory() {
         <div className="flex gap-2">
           {canExport ? (
             <>
-              <button onClick={() => exportInventory(state.products, 'excel', state.settings?.businessName)} className="btn-secondary text-xs">📊 Excel</button>
+              <ExcelDataActions entity="products" rows={state.products} onImport={handleImportProducts} exportLabel="Excel" />
               <button onClick={() => exportInventory(state.products, 'pdf', state.settings?.businessName)} className="btn-secondary text-xs">📄 PDF</button>
             </>
           ) : (
             <>
               <ProGate feature="exportInventory" mode="button" label="Excel" />
+              <ProGate feature="exportInventory" mode="button" label="Importar" />
               <ProGate feature="exportInventory" mode="button" label="PDF" />
             </>
           )}
@@ -264,6 +328,7 @@ export default function Inventory() {
           suppliers={state.suppliers}
           onClose={() => setModal(null)}
           onSave={(d) => handleSave(d, modal.type === 'edit')}
+          saving={savingProduct}
         />
       )}
 
@@ -272,7 +337,7 @@ export default function Inventory() {
   )
 }
 
-function ProductModal({ data, suppliers, onClose, onSave }) {
+function ProductModal({ data, suppliers, onClose, onSave, saving = false }) {
   const { businessId } = useAuth()
   const [form, setForm] = useState({
     id:          data?.id          || '',
@@ -289,6 +354,7 @@ function ProductModal({ data, suppliers, onClose, onSave }) {
     description: data?.description || '',
     imageUrl:    data?.imageUrl    || '',
     color:       data?.color       || '',
+    taxIncluded: data?.taxIncluded === true,
   })
   const [uploading, setUploading] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -296,13 +362,21 @@ function ProductModal({ data, suppliers, onClose, onSave }) {
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 2 * 1024 * 1024) { toast.error('La imagen no puede superar 2MB'); return }
+
     setUploading(true)
-    const tempId = form.id || `temp_${Date.now()}`
-    const url = await uploadProductImage(businessId, tempId, file)
-    if (url) { set('imageUrl', url); toast.success('Imagen subida') }
-    else toast.error('Error al subir imagen')
-    setUploading(false)
+    try {
+      const tempId = form.id || `temp_${Date.now()}`
+      const url = await uploadProductImage(businessId, tempId, file)
+      set('imageUrl', url)
+      set('color', '')
+      toast.success('Imagen subida')
+    } catch (err) {
+      console.error('Error al subir imagen de producto:', err)
+      toast.error(err?.message || 'Error al subir imagen')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
   }
 
   return (
@@ -328,6 +402,18 @@ function ProductModal({ data, suppliers, onClose, onSave }) {
           <div><label className="label">Costo (RD$) *</label><input className="input" type="number" value={form.cost} onChange={e => set('cost', e.target.value)} /></div>
           <div><label className="label">Precio Venta (RD$) *</label><input className="input" type="number" value={form.price} onChange={e => set('price', e.target.value)} /></div>
         </div>
+        <label className="flex items-start gap-3 bg-[#101c35] border border-white/10 rounded-xl p-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.taxIncluded}
+            onChange={e => set('taxIncluded', e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded accent-[#00e5a0]"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-slate-300">ITBIS incluido en el precio de venta</span>
+            <span className="block text-xs text-slate-500 mt-0.5">Al marcarlo, el precio escrito ya contiene el 18% de ITBIS y no se le sumará de nuevo al cobrar.</span>
+          </span>
+        </label>
         <div className="form-row">
           <div><label className="label">Stock Actual</label><input className="input" type="number" value={form.stock} onChange={e => set('stock', e.target.value)} /></div>
           <div><label className="label">Stock Minimo</label><input className="input" type="number" value={form.minStock} onChange={e => set('minStock', e.target.value)} /></div>
@@ -365,11 +451,11 @@ function ProductModal({ data, suppliers, onClose, onSave }) {
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={() => {
+          <button className="btn-primary" disabled={saving} onClick={async () => {
             if (!form.name || !form.cost || !form.price) return toast.error('Nombre, costo y precio son requeridos')
-            onSave(form)
+            await onSave(form)
           }}>
-            {data ? 'Guardar' : 'Crear Producto'}
+            {saving ? 'Guardando...' : (data ? 'Guardar' : 'Crear Producto')}
           </button>
         </div>
       </div>

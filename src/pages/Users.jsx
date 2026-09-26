@@ -2,9 +2,9 @@ import React, { useState } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useAuth } from '../contexts/AuthContext'
 import Modal from '../components/ui/Modal'
+import ExcelDataActions from '../components/common/ExcelDataActions'
 import UpgradeModal from '../components/ui/UpgradeModal'
 import { defaultPermissions } from '../utils/helpers'
-import { bizUpdate } from '../services/firestoreService'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 
@@ -42,7 +42,7 @@ const PERMISSION_GROUPS = [
 
 export default function Users() {
   const { state, dispatch }    = useApp()
-  const { businessId, currentUser, addEmployee, updateUserRole, deleteUser } = useAuth()
+  const { currentUser, addEmployee, updateUserRole, updateUserPermissions, deleteUser } = useAuth()
   const { canAdd, usage, upgradeMessage } = usePlan()
   const [modal, setModal]      = useState(null)
   const [loading, setLoading]  = useState(false)
@@ -96,15 +96,48 @@ export default function Users() {
 
   const handleSavePermissions = async (user, permissions) => {
     setLoading(true)
-    try {
-      await bizUpdate(businessId, 'users', user.id, { permissions })
-      dispatch({ type: 'UPDATE_USER', payload: { ...user, permissions } })
+    const result = await updateUserPermissions(user.id, permissions)
+    if (result.success) {
+      dispatch({ type: 'UPDATE_USER', payload: { ...user, permissions: result.permissions } })
       toast.success('Permisos actualizados')
       setModal(null)
-    } catch {
-      toast.error('Error al guardar permisos')
+    } else {
+      toast.error(result.error || 'Error al guardar permisos')
     }
     setLoading(false)
+  }
+
+  const handleImportUsers = async (rows) => {
+    if (!isAdmin) return toast.error('Solo el administrador puede importar usuarios')
+    setLoading(true)
+    let imported = 0
+    let skipped = 0
+    for (const row of rows) {
+      const existing = state.users.find(u => u.email?.toLowerCase() === row.email?.toLowerCase() || u.id === row.id)
+      if (existing) {
+        const updated = { ...existing, name: row.name || existing.name, role: row.role || existing.role, active: row.active !== false }
+        const result = await updateUserRole(existing.id, updated.role)
+        if (result.success) {
+          dispatch({ type: 'UPDATE_USER', payload: updated })
+          imported += 1
+        } else skipped += 1
+        continue
+      }
+      if (!row.password || row.password.length < 8) {
+        skipped += 1
+        continue
+      }
+      const result = await addEmployee({ email: row.email, password: row.password, displayName: row.name, role: row.role })
+      if (result.success) {
+        dispatch({ type: 'ADD_USER', payload: { id: result.uid, name: row.name, email: row.email, role: row.role, active: row.active !== false, createdAt: new Date() } })
+        imported += 1
+      } else {
+        skipped += 1
+      }
+    }
+    setLoading(false)
+    if (imported) toast.success(`${imported} usuario(s) importado(s)/actualizado(s) desde Excel`)
+    if (skipped) toast.error(`${skipped} usuario(s) no se importaron. Para usuarios nuevos el Excel debe tener una contraseña de mínimo 8 caracteres.`)
   }
 
   return (
@@ -132,12 +165,15 @@ export default function Users() {
           )}
         </div>
         {isAdmin && (
-          <button
-            onClick={() => canAddUser ? setModal({ type: 'new' }) : setShowUpgrade(true)}
-            className="btn-primary"
-          >
-            + Nuevo Empleado
-          </button>
+          <div className="flex gap-2 flex-wrap justify-end">
+            <ExcelDataActions entity="users" rows={activeUsers.map(u => ({ ...u, password: '' }))} onImport={handleImportUsers} disabled={loading} />
+            <button
+              onClick={() => canAddUser ? setModal({ type: 'new' }) : setShowUpgrade(true)}
+              className="btn-primary"
+            >
+              + Nuevo Empleado
+            </button>
+          </div>
         )}
       </div>
 
@@ -321,7 +357,7 @@ function AddEmployeeModal({ onClose, onSave, loading }) {
         <div><label className="label">Correo electronico *</label>
           <input className="input" type="email" value={form.email} onChange={e => set('email', e.target.value)} /></div>
         <div><label className="label">Contrasena temporal *</label>
-          <input className="input" type="password" placeholder="Min. 6 caracteres" value={form.password} onChange={e => set('password', e.target.value)} /></div>
+          <input className="input" type="password" minLength={8} maxLength={128} placeholder="Min. 8 caracteres" value={form.password} onChange={e => set('password', e.target.value)} /></div>
         <div>
           <label className="label">Rol</label>
           <select className="select" value={form.role} onChange={e => set('role', e.target.value)}>
@@ -333,7 +369,7 @@ function AddEmployeeModal({ onClose, onSave, loading }) {
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
           <button className="btn-primary" disabled={loading} onClick={() => {
             if (!form.name || !form.email || !form.password) return toast.error('Completa todos los campos')
-            if (form.password.length < 6) return toast.error('Contrasena minimo 6 caracteres')
+            if (form.password.length < 8) return toast.error('Contraseña mínimo 8 caracteres')
             onSave(form)
           }}>
             {loading ? 'Creando...' : 'Crear Empleado'}

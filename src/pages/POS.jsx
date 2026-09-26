@@ -50,7 +50,7 @@ export default function POS() {
   const handleAddProduct = (product) => {
     dispatch({
       type: 'ADD_TO_CART',
-      payload: { id: product.id, type: 'product', name: product.name, price: product.price, cost: product.cost },
+      payload: { id: product.id, type: 'product', name: product.name, price: product.price, cost: product.cost, taxIncluded: product.taxIncluded === true },
     })
     toast.success(`${product.name} agregado`, { duration: 1000 })
   }
@@ -59,7 +59,7 @@ export default function POS() {
     <>
       <div className="pos-layout animate-fade-in">
       {/* ── Left panel ── */}
-      <div className="flex flex-col overflow-hidden">
+      <div className="flex flex-col min-h-0 overflow-visible md:overflow-hidden">
         {/* Tabs */}
         <div className="flex gap-1 bg-[#101c35] rounded-xl p-1 mb-4">
           {TABS.map(t => (
@@ -73,7 +73,7 @@ export default function POS() {
         </div>
 
         {/* Tab content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-visible md:overflow-y-auto">
 
           {/* ── Products ── */}
           {tab === 'products' && (
@@ -112,7 +112,7 @@ export default function POS() {
               </div>
 
               {/* Product grid */}
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 {filtered.map(p => (
                   <ProductCard key={p.id} product={p} onAdd={handleAddProduct} />
                 ))}
@@ -187,7 +187,9 @@ export default function POS() {
       </div>
 
       {/* ── Right: Cart ── */}
-      <SaleCart />
+      <div className="hidden md:block min-h-0">
+        <SaleCart />
+      </div>
 
       {/* ── Invoice viewer from recent tab ── */}
       {viewSale && (

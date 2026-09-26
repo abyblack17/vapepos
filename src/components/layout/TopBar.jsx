@@ -30,6 +30,7 @@ export default function TopBar({ currentPage, onMenuClick }) {
   }, [])
 
   const cashOpen = state.cashSession?.open
+  const businessName = state.settings?.businessName?.trim() || 'VapePOS'
 
   return (
     <div className="flex-shrink-0">
@@ -44,7 +45,7 @@ export default function TopBar({ currentPage, onMenuClick }) {
         </div>
       )}
 
-      <header className="h-[56px] md:h-[60px] bg-[#0c1424] border-b border-white/5 flex items-center px-3 md:px-5 gap-3">
+      <header className="relative h-[56px] md:h-[60px] bg-[#0c1424] border-b border-white/5 flex items-center px-3 md:px-5 gap-3">
 
         {/* Boton hamburguesa — solo en movil */}
         <button
@@ -60,6 +61,13 @@ export default function TopBar({ currentPage, onMenuClick }) {
         <h1 className="font-display text-base md:text-lg font-bold text-slate-100 truncate">
           {PAGE_TITLES[currentPage] || 'VapePOS'}
         </h1>
+
+        {/* Nombre del negocio — centrado en desktop y tomado de Configuración */}
+        <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 w-[42%] max-w-[720px] items-center justify-center pointer-events-none">
+          <span className="font-display text-lg lg:text-xl font-black gradient-neon truncate tracking-[0.12em] text-center drop-shadow-[0_0_14px_rgba(0,229,160,0.16)]">
+            {businessName}
+          </span>
+        </div>
 
         <div className="flex-1" />
 

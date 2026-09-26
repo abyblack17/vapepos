@@ -365,3 +365,315 @@ background: var(--scrollbar);
 .bottle-fill-red {
   background: linear-gradient(90deg, #ef4444, #dc2626);
 }
+
+/* ── Mobile / PWA Native Feel ──────────────────────────── */
+
+/* Prevent iOS elastic scroll on the shell */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* Ensure scrollable areas still scroll smoothly on iOS */
+.overflow-y-auto, main {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* Minimum touch target size (44px) for mobile accessibility */
+@media (max-width: 768px) {
+  button, a, [role="button"], label.cursor-pointer {
+    min-height: 44px;
+  }
+
+  /* Slightly larger text for readability on small screens */
+  .text-xs { font-size: 0.7rem; }
+
+  /* Give nav items more breathing room on mobile */
+  nav .flex { gap: 0.25rem; }
+
+  /* Modals should fill screen nicely on mobile */
+  .fixed.inset-0 > div {
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+}
+
+/* Tablet: 2-column layouts look better at 768-1024px */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .pos-layout {
+    grid-template-columns: 1fr 320px;
+  }
+}
+
+/* Use dynamic viewport height for full-bleed layouts */
+.h-screen {
+  height: 100dvh;
+}
+
+/* Bottom safe area for iPhone home bar */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+/* ── Mobile native-app polish ───────────────────────────── */
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+.app-shell,
+.app-main,
+.pos-layout,
+.pos-layout > * {
+  min-height: 0;
+}
+
+.app-main {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  background: rgba(12, 20, 36, 0.96);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(14px);
+}
+
+.mobile-bottom-nav-item {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 14px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.mobile-bottom-nav-item:active {
+  transform: scale(0.96);
+}
+
+.mobile-bottom-nav-item.active {
+  background: rgba(0,229,160,0.12);
+  color: #00e5a0;
+  border: 1px solid rgba(0,229,160,0.18);
+}
+
+@media (max-width: 767px) {
+  .app-main {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  .page-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .page-header > * {
+    width: 100%;
+  }
+
+  .page-title {
+    font-size: 1.25rem;
+  }
+
+  .card,
+  .card-elevated,
+  .table-container {
+    border-radius: 1rem;
+  }
+
+  .table-container,
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .input,
+  .select {
+    min-height: 44px;
+  }
+
+  .pos-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: auto;
+    overflow: visible;
+  }
+}
+
+
+/* ── PWA install/fullscreen helper ───────────────────────── */
+.pwa-install-tip {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(0,229,160,0.20);
+  border-radius: 18px;
+  background: rgba(12,20,36,0.97);
+  box-shadow: 0 18px 55px rgba(0,0,0,0.45);
+  backdrop-filter: blur(16px);
+}
+
+.pwa-install-btn,
+.pwa-ghost-btn,
+.pwa-close-btn {
+  min-height: 38px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 800;
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+
+.pwa-install-btn:active,
+.pwa-ghost-btn:active,
+.pwa-close-btn:active {
+  transform: scale(0.96);
+}
+
+.pwa-install-btn {
+  padding: 0 12px;
+  background: #00e5a0;
+  color: #080d18;
+}
+
+.pwa-ghost-btn {
+  padding: 0 10px;
+  color: #00e5a0;
+  background: rgba(0,229,160,0.10);
+  border: 1px solid rgba(0,229,160,0.20);
+}
+
+.pwa-close-btn {
+  width: 38px;
+  color: #94a3b8;
+  background: rgba(255,255,255,0.06);
+}
+
+html.standalone .pwa-install-tip,
+html.fullscreen .pwa-install-tip {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .pwa-install-tip {
+    left: auto;
+    right: 18px;
+    bottom: 18px;
+    width: min(440px, calc(100vw - 36px));
+  }
+}
+
+/* ── Capacitor mobile scroll fix ─────────────────────────────
+   En APK nativa queremos un solo scroll principal en móvil. Los paneles
+   internos dejan de atrapar el gesto táctil y el contenido sube/baja desde
+   cualquier punto de la pantalla. */
+@media (max-width: 767px) {
+  .app-main {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+    overscroll-behavior-y: contain;
+  }
+
+  .pos-layout,
+  .pos-layout > *,
+  .pos-layout .overflow-y-auto,
+  .pos-layout .overflow-hidden {
+    max-height: none !important;
+    overflow: visible !important;
+    touch-action: pan-y !important;
+  }
+
+  .pos-layout .overflow-x-auto {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+}
+
+
+/* Carrito separado en móvil */
+.sale-cart-panel {
+  height: calc(100dvh - 10rem);
+  max-height: calc(100dvh - 10rem);
+  min-height: 0;
+}
+
+.cart-page {
+  max-width: 720px;
+  margin: 0 auto;
+  min-height: 0;
+}
+
+.mobile-bottom-nav-item {
+  position: relative;
+}
+
+.mobile-cart-badge {
+  position: absolute;
+  top: 4px;
+  right: 18%;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #00e5a0;
+  color: #080d18;
+  font-size: 10px;
+  font-weight: 900;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1;
+}
+
+@media (min-width: 768px) {
+  .sale-cart-panel {
+    height: 100%;
+    max-height: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .cart-page .sale-cart-panel {
+    height: calc(100dvh - 9.75rem);
+    max-height: calc(100dvh - 9.75rem);
+  }
+}
+
+/* Ya no mostramos el aviso Full/Instalar dentro de Capacitor. */
+.pwa-install-tip { display: none !important; }

@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { id: 'customers',   icon: '◍',  label: 'Clientes'      },
   { id: 'suppliers',   icon: '⬡',  label: 'Proveedores'   },
   { id: 'reports',     icon: '◫',  label: 'Reportes'      },
+  { id: 'fiscal',      icon: '▣',  label: 'Fiscal / NCF'  },
   { id: 'cash',        icon: '◎',  label: 'Caja'          },
   { id: 'users',       icon: '⊙',  label: 'Usuarios'      },
   { id: 'settings',    icon: '◈',  label: 'Configuracion' },
@@ -28,13 +29,14 @@ const PAGE_PERMISSION = {
   purchases:   'inventory',
   suggestions: 'suggestions',
   suppliers:   'suppliers',
+  fiscal:      'settings',
 }
 
 const PRO_ITEMS = ['suppliers']
 
 export default function Sidebar({ currentPage, onNavigate }) {
   const { state }    = useApp()
-  const { logout, business }   = useAuth()
+  const { business }   = useAuth()
   const { hasFeature, isPro, daysLeft, inGrace, isTrial } = usePlan()
   const { currentUser, alerts } = state
   const role = currentUser?.role || 'Cajero'
@@ -58,7 +60,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
 
   return (
     <>
-    <aside className="w-56 h-screen bg-[#0c1424] border-r border-white/5 flex flex-col flex-shrink-0 overflow-hidden">
+    <aside className="w-56 bg-[#0c1424] border-r border-white/5 flex flex-col flex-shrink-0 overflow-hidden" style={{height: '100dvh'}}>
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/5">
         <div className="font-display text-2xl font-black gradient-neon tracking-tight">VapePOS</div>
@@ -99,7 +101,9 @@ export default function Sidebar({ currentPage, onNavigate }) {
           const permKey   = PAGE_PERMISSION[item.id] || item.id
           const isProItem = PRO_ITEMS.includes(item.id)
 
-          if (!canDo(currentUser, permKey) && !isProItem) return null
+          // Configuración siempre está disponible para cuenta/sesión. La página
+          // protege por separado los ajustes administrativos del negocio.
+          if (item.id !== 'settings' && !canDo(currentUser, permKey) && !isProItem) return null
           if (isProItem && !canDo(currentUser, permKey)) return null
 
           const isActive   = currentPage === item.id
@@ -141,7 +145,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
       </nav>
 
       {/* User + Plan badge + Logout */}
-      <div className="px-3 py-4 border-t border-white/5 space-y-2">
+      <div className="px-3 py-4 border-t border-white/5 space-y-2 pb-28 md:pb-4">
         {/* Plan badge — clickable para ver info */}
         <button
           onClick={() => setShowPlanInfo(true)}
@@ -172,21 +176,16 @@ export default function Sidebar({ currentPage, onNavigate }) {
         )}
 
         {/* User info */}
-        <div className="flex items-center gap-3 px-3 py-2.5 bg-[#101c35] rounded-lg">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00e5a0] to-[#00c4e8] flex items-center justify-center text-xs font-bold text-[#080d18] flex-shrink-0">
-            {currentUser?.name?.[0] || 'A'}
+        <div className="flex items-center gap-3 px-3 py-2.5 bg-[#101c35] rounded-lg overflow-hidden">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#00e5a0] to-[#00c4e8] flex items-center justify-center text-xs font-bold text-[#080d18] flex-shrink-0">
+            {(currentUser?.name || currentUser?.email || 'A')?.[0]?.toUpperCase()}
           </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-slate-200 truncate">{currentUser?.name || 'Admin'}</div>
-            <div className="text-xs text-[#00e5a0]">{role}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-slate-200 truncate leading-tight">{currentUser?.name || 'Admin'}</div>
+            <div className="text-[11px] text-slate-500 truncate leading-tight">{currentUser?.email || ''}</div>
+            <div className="text-xs text-[#00e5a0] truncate leading-tight">{role}</div>
           </div>
         </div>
-
-        {/* Logout */}
-        <button onClick={logout}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all">
-          <span>⏻</span><span>Cerrar Sesion</span>
-        </button>
       </div>
     </aside>
 

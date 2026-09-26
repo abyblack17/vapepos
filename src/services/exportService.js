@@ -157,3 +157,53 @@ export async function exportSalesReport(sales, format, businessName, canViewProf
     await exportToPDF(rows, columns, filename, 'Reporte de Ventas', businessName)
   }
 }
+
+// ── FISCAL REPORT EXPORT ─────────────────────────────────────
+export async function exportFiscalReport(invoices, format, businessName) {
+  const columns = [
+    { key: 'saleNumber',   label: 'Factura',      width: 14 },
+    { key: 'date',         label: 'Fecha',        width: 12 },
+    { key: 'time',         label: 'Hora',         width: 10 },
+    { key: 'typeCode',     label: 'Tipo',         width: 10 },
+    { key: 'ncf',          label: 'NCF',          width: 18 },
+    { key: 'expiresAt',    label: 'Vence NCF',    width: 12 },
+    { key: 'customerName', label: 'Cliente',      width: 24 },
+    { key: 'customerRnc',  label: 'RNC Cliente',  width: 14 },
+    { key: 'subtotal',     label: 'Subtotal',     width: 12, align: 'right' },
+    { key: 'tax',          label: 'ITBIS',        width: 12, align: 'right' },
+    { key: 'total',        label: 'Total',        width: 12, align: 'right' },
+    { key: 'payment',      label: 'Pago',         width: 14 },
+    { key: 'user',         label: 'Cajero',       width: 18 },
+  ]
+
+  const rows = invoices.map(i => ({
+    saleNumber:   i.saleNumber || '—',
+    date:         i.date || '—',
+    time:         i.time || '—',
+    typeCode:     i.typeCode || '—',
+    ncf:          i.ncf || '—',
+    expiresAt:    i.expiresAt || '—',
+    customerName: i.customerName || 'Consumidor Final',
+    customerRnc:  i.customerRnc || '—',
+    subtotal:     `RD$${i.subtotal || 0}`,
+    tax:          `RD$${i.tax || 0}`,
+    total:        `RD$${i.total || 0}`,
+    payment:      i.payment || '—',
+    user:         i.user || '—',
+  }))
+
+  rows.push({
+    saleNumber: 'TOTAL', date: '', time: '', typeCode: '', ncf: '', expiresAt: '', customerName: '', customerRnc: '',
+    subtotal: `RD$${invoices.reduce((a, i) => a + (i.subtotal || 0), 0)}`,
+    tax:      `RD$${invoices.reduce((a, i) => a + (i.tax || 0), 0)}`,
+    total:    `RD$${invoices.reduce((a, i) => a + (i.total || 0), 0)}`,
+    payment: '', user: '',
+  })
+
+  const filename = `Reporte-Fiscal-${new Date().toISOString().split('T')[0]}`
+  if (format === 'excel') {
+    await exportToExcel(rows, columns, filename, 'Fiscal')
+  } else {
+    await exportToPDF(rows, columns, filename, 'Reporte Fiscal NCF', businessName)
+  }
+}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useAuth } from '../contexts/AuthContext'
 import Modal from '../components/ui/Modal'
+import ExcelDataActions from '../components/common/ExcelDataActions'
 import { genId } from '../utils/helpers'
 import {
   globalGetAll, globalAdd, globalSet, globalDelete,
@@ -152,6 +153,21 @@ export default function Suppliers() {
     if (businessId) await bizDelete(businessId, 'suppliers', supplier.id)
     toast.success(`"${supplier.name}" eliminado`)
     setModal(null)
+  }
+
+  const handleImportSuppliers = async (rows) => {
+    let imported = 0
+    for (const row of rows) {
+      const id = row.id || genId('sup')
+      const payload = { ...row, id }
+      dispatch({ type: state.suppliers.some(s => s.id === id) ? 'UPDATE_SUPPLIER' : 'ADD_SUPPLIER', payload })
+      if (businessId) {
+        const { id: supplierId, ...data } = payload
+        await bizSet(businessId, 'suppliers', supplierId, data)
+      }
+      imported += 1
+    }
+    toast.success(`${imported} proveedor(es) importado(s) desde Excel`)
   }
 
   return (
@@ -330,6 +346,10 @@ export default function Suppliers() {
       ══════════════════════════════════════════════════════ */}
       {tab === 'milista' && (
         <div className="space-y-4">
+          <div className="flex justify-between items-center gap-3 flex-wrap">
+            <div className="text-sm text-slate-400">{state.suppliers.length} proveedores en tu lista</div>
+            <ExcelDataActions entity="suppliers" rows={state.suppliers} onImport={handleImportSuppliers} />
+          </div>
           <div className="flex justify-between items-center">
             <div className="text-sm text-slate-400">{state.suppliers.length} proveedores en tu lista</div>
             <button onClick={() => setModal({ type: 'new' })} className="btn-primary">+ Agregar proveedor</button>

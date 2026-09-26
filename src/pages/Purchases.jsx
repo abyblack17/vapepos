@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useApp } from '../contexts/AppContext'
 import Modal from '../components/ui/Modal'
+import ExcelDataActions from '../components/common/ExcelDataActions'
 import { fmt, genId, today, formatTime } from '../utils/helpers'
 import toast from 'react-hot-toast'
 
@@ -51,6 +52,15 @@ export default function Purchases() {
     setModal(null)
   }
 
+  const handleImportPurchases = async (rows) => {
+    let imported = 0
+    for (const row of rows) {
+      dispatch({ type: 'ADD_PURCHASE', payload: { ...row, id: row.id || genId('purch') } })
+      imported += 1
+    }
+    toast.success(`${imported} compra(s) importada(s) desde Excel`)
+  }
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex justify-between items-center">
@@ -58,7 +68,10 @@ export default function Purchases() {
           <h2 className="font-display font-bold text-slate-100 text-lg">Compras</h2>
           <div className="text-xs text-slate-400">{purchases.length} compras registradas</div>
         </div>
-        <button onClick={() => setModal('new')} className="btn-primary">+ Registrar Compra</button>
+        <div className="flex gap-2 flex-wrap justify-end">
+          <ExcelDataActions entity="purchases" rows={purchases} onImport={handleImportPurchases} />
+          <button onClick={() => setModal('new')} className="btn-primary">+ Registrar Compra</button>
+        </div>
       </div>
 
       {/* Summary cards */}

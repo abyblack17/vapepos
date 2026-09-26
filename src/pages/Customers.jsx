@@ -3,8 +3,10 @@ import { useApp } from '../contexts/AppContext'
 import { useAuth } from '../contexts/AuthContext'
 import Modal from '../components/ui/Modal'
 import UpgradeModal from '../components/ui/UpgradeModal'
-import { bizAdd, bizUpdate, bizDelete } from '../services/firestoreService'
+import ExcelDataActions from '../components/common/ExcelDataActions'
+import { bizAdd, bizUpdate, bizDelete, bizSet } from '../services/firestoreService'
 import { fmt, genId, formatDate } from '../utils/helpers'
+import { findExistingByNameOrCode, hasDuplicateName, hasDuplicateCode, makeCustomerCode } from '../utils/recordGuards'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 
@@ -15,39 +17,73 @@ export default function Customers() {
   const [search, setSearch]   = useState('')
   const [modal, setModal]     = useState(null)
   const [showUpgrade, setShowUpgrade] = useState(false)
+  const [savingCustomer, setSavingCustomer] = useState(false)
 
   const activeCustomers = state.customers.filter(c => !c.planLocked)
   const lockedCustomers = state.customers.filter(c => c.planLocked)
 
   const filtered = activeCustomers.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone || '').includes(search)
+    (c.phone || '').includes(search) ||
+    (c.code || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const customerUsage  = usage('customers')
   const canAddCustomer = canAdd('customers')
 
   const handleSave = async (data, isEdit) => {
+    if (savingCustomer) return
     if (!isEdit && !canAddCustomer) { setShowUpgrade(true); return }
-    if (isEdit) {
-      dispatch({ type: 'UPDATE_CUSTOMER', payload: data })
-      if (businessId) await bizUpdate(businessId, 'customers', data.id, data)
-      toast.success('Cliente actualizado')
-    } else {
-      const newCustomer = { ...data, totalSpent: 0, totalTransactions: 0, lastPurchase: null }
-      if (businessId) {
-        const saved = await bizAdd(businessId, 'customers', newCustomer)
-        if (saved?.id) {
-          dispatch({ type: 'ADD_CUSTOMER', payload: { ...newCustomer, id: saved.id, createdAt: new Date() } })
-          toast.success(`Cliente "${data.name}" registrado`)
-          setModal(null)
-          return
-        }
-      }
-      dispatch({ type: 'ADD_CUSTOMER', payload: { id: genId('c'), ...newCustomer, createdAt: new Date() } })
-      toast.success(`Cliente "${data.name}" registrado`)
+
+    const name = data.name?.trim()
+    if (!name) { toast.error('Nombre requerido'); return }
+    const code = data.code?.trim() || makeCustomerCode(state.customers)
+
+    if (hasDuplicateName(state.customers, name, isEdit ? data.id : null)) {
+      toast.error(`Ya existe un cliente llamado "${name}"`)
+      return
     }
-    setModal(null)
+    if (hasDuplicateCode(state.customers, code, isEdit ? data.id : null)) {
+      toast.error(`Ya existe un cliente con el código ${code}`)
+      return
+    }
+
+    setSavingCustomer(true)
+    try {
+      if (isEdit) {
+        const payload = { ...data, name, code }
+        dispatch({ type: 'UPDATE_CUSTOMER', payload })
+        if (businessId) await bizUpdate(businessId, 'customers', payload.id, payload)
+        toast.success('Cliente actualizado')
+      } else {
+        const newCustomer = {
+          ...data,
+          name,
+          code,
+          totalSpent: 0,
+          totalTransactions: 0,
+          creditBalance: 0,
+          refillRewards: 0,
+          totalRefills: 0,
+          rewardPoints: 0,
+          lastPurchase: null,
+        }
+        if (businessId) {
+          const saved = await bizAdd(businessId, 'customers', newCustomer)
+          if (saved?.id) {
+            dispatch({ type: 'ADD_CUSTOMER', payload: { ...newCustomer, id: saved.id, createdAt: new Date() } })
+            toast.success(`Cliente "${name}" registrado`)
+            setModal(null)
+            return
+          }
+        }
+        dispatch({ type: 'ADD_CUSTOMER', payload: { id: genId('c'), ...newCustomer, createdAt: new Date() } })
+        toast.success(`Cliente "${name}" registrado`)
+      }
+      setModal(null)
+    } finally {
+      setSavingCustomer(false)
+    }
   }
 
   const handleDelete = async (customer) => {
@@ -55,6 +91,34 @@ export default function Customers() {
     if (businessId) await bizDelete(businessId, 'customers', customer.id)
     toast.success(`Cliente "${customer.name}" eliminado`)
     setModal(null)
+  }
+
+  const handleImportCustomers = async (rows) => {
+    let imported = 0
+    let skipped = 0
+    const working = [...state.customers]
+    for (const row of rows) {
+      if (!row.name?.trim()) { skipped += 1; continue }
+      const existing = findExistingByNameOrCode(working, row, 'code')
+      const id = existing?.id || row.id || genId('c')
+      const payload = {
+        ...existing,
+        ...row,
+        id,
+        name: row.name.trim(),
+        code: row.code?.trim() || existing?.code || makeCustomerCode(working),
+      }
+      dispatch({ type: existing ? 'UPDATE_CUSTOMER' : 'ADD_CUSTOMER', payload })
+      const pos = working.findIndex(c => c.id === id)
+      if (pos >= 0) working[pos] = payload
+      else working.push(payload)
+      if (businessId) {
+        const { id: customerId, ...data } = payload
+        await bizSet(businessId, 'customers', customerId, data)
+      }
+      imported += 1
+    }
+    toast.success(`${imported} cliente(s) importado(s)/actualizado(s)${skipped ? `, ${skipped} omitido(s)` : ''}`)
   }
 
   return (
@@ -96,13 +160,14 @@ export default function Customers() {
       </div>
 
       {/* Search + Add */}
-      <div className="flex gap-3">
-        <div className="flex-1 flex items-center gap-2 bg-[#101c35] border border-white/10 rounded-lg px-3 py-2.5">
+      <div className="flex gap-3 flex-wrap">
+        <div className="flex-1 flex items-center gap-2 bg-[#101c35] border border-white/10 rounded-lg px-3 py-2.5 min-w-[220px]">
           <span className="text-slate-500">🔍</span>
           <input className="flex-1 bg-transparent outline-none text-sm text-slate-200 placeholder-slate-500"
             placeholder="Buscar por nombre o teléfono..."
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
+        <ExcelDataActions entity="customers" rows={activeCustomers} onImport={handleImportCustomers} />
         <button onClick={() => canAddCustomer ? setModal({ type: 'new' }) : setShowUpgrade(true)} className="btn-primary">
           + Nuevo Cliente
         </button>
@@ -113,7 +178,7 @@ export default function Customers() {
         <table className="w-full">
           <thead>
             <tr>
-              {['Cliente', 'Teléfono', 'Email', 'Total Comprado', 'Transacciones', 'Última Compra', 'Notas', ''].map(h => (
+              {['Código', 'Cliente', 'Teléfono', 'Email', 'Total Comprado', 'Deuda', 'Recargas Acum.', 'Puntos', 'Transacciones', 'Última Compra', 'Notas', ''].map(h => (
                 <th key={h} className="table-header">{h}</th>
               ))}
             </tr>
@@ -121,6 +186,7 @@ export default function Customers() {
           <tbody>
             {filtered.map(c => (
               <tr key={c.id} className="table-row">
+                <td className="table-cell font-mono text-xs text-[#00c4e8]">{c.code || '—'}</td>
                 <td className="table-cell">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full bg-[#00e5a0]/10 border border-[#00e5a0]/20 flex items-center justify-center text-xs font-bold text-[#00e5a0] flex-shrink-0">
@@ -132,6 +198,13 @@ export default function Customers() {
                 <td className="table-cell font-mono text-slate-300">{c.phone}</td>
                 <td className="table-cell text-slate-400 text-xs">{c.email || '—'}</td>
                 <td className="table-cell font-mono font-bold text-[#00e5a0]">{fmt(c.totalSpent || 0)}</td>
+                <td className={`table-cell font-mono font-bold ${(c.creditBalance || 0) > 0 ? 'text-red-400' : 'text-slate-500'}`}>{fmt(c.creditBalance || 0)}</td>
+                <td className="table-cell text-center">
+                  <span className="badge badge-blue">{c.refillRewards ?? c.totalRefills ?? 0}</span>
+                </td>
+                <td className="table-cell text-center">
+                  <span className="badge badge-green">{c.rewardPoints ?? Math.floor((c.totalSpent || 0) / 50)}</span>
+                </td>
                 <td className="table-cell text-center"><span className="badge badge-blue">{c.totalTransactions || 0}</span></td>
                 <td className="table-cell text-slate-400 text-xs">{c.lastPurchase ? formatDate(c.lastPurchase) : '—'}</td>
                 <td className="table-cell text-slate-500 text-xs max-w-[160px] truncate">{c.notes || '—'}</td>
@@ -150,7 +223,7 @@ export default function Customers() {
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={8} className="table-cell text-center text-slate-500 py-10">Sin clientes encontrados</td></tr>
+              <tr><td colSpan={12} className="table-cell text-center text-slate-500 py-10">Sin clientes encontrados</td></tr>
             )}
           </tbody>
         </table>
@@ -196,6 +269,8 @@ export default function Customers() {
           data={modal.type === 'edit' ? modal.data : null}
           onClose={() => setModal(null)}
           onSave={(d) => handleSave(d, modal.type === 'edit')}
+          saving={savingCustomer}
+          customers={state.customers}
         />
       )}
 
@@ -204,10 +279,11 @@ export default function Customers() {
   )
 }
 
-function CustomerModal({ data, onClose, onSave }) {
+function CustomerModal({ data, onClose, onSave, saving = false, customers = [] }) {
   const [form, setForm] = useState({
     id: data?.id || '', name: data?.name || '',
     phone: data?.phone || '', email: data?.email || '', notes: data?.notes || '',
+    code: data?.code || (!data ? makeCustomerCode(customers) : ''),
   })
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   return (
@@ -218,11 +294,12 @@ function CustomerModal({ data, onClose, onSave }) {
           <div><label className="label">Teléfono</label><input className="input" value={form.phone} onChange={e => set('phone', e.target.value)} placeholder="809-555-0000" /></div>
           <div><label className="label">Email (opcional)</label><input className="input" value={form.email} onChange={e => set('email', e.target.value)} /></div>
         </div>
+        <div><label className="label">Código de cliente</label><input className="input font-mono" value={form.code} onChange={e => set('code', e.target.value)} placeholder="Se genera automático" /></div>
         <div><label className="label">Notas</label><textarea className="input resize-none" rows={3} value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Preferencias, observaciones..." /></div>
         <div className="flex gap-2 justify-end pt-2">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={() => { if (!form.name) return toast.error('Nombre requerido'); onSave(form) }}>
-            {data ? 'Guardar' : 'Registrar Cliente'}
+          <button className="btn-primary" disabled={saving} onClick={async () => { if (!form.name) return toast.error('Nombre requerido'); await onSave(form) }}>
+            {saving ? 'Guardando...' : (data ? 'Guardar' : 'Registrar Cliente')}
           </button>
         </div>
       </div>

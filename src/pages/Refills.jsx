@@ -4,18 +4,22 @@ import { useAuth } from '../contexts/AuthContext'
 import BottleProgress from '../components/ui/BottleProgress'
 import Modal from '../components/ui/Modal'
 import UpgradeModal from '../components/ui/UpgradeModal'
+import ExcelDataActions from '../components/common/ExcelDataActions'
 import { fmt, genId } from '../utils/helpers'
+import { findExistingByNameOrCode, hasDuplicateName, makeLiquidCode } from '../utils/recordGuards'
 import { bizAdd, bizSet, bizUpdate, bizDelete } from '../services/firestoreService'
-import { uploadLiquidImage } from '../services/storageService'
+import { uploadLiquidImage, deleteImage } from '../services/storageService'
 import { getBottlePct, getRendimientoReport, detectLoss, getNicotinaLabel } from '../services/liquidService'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '../config/firebase'
 
 const ALL_TABS = ['Botellas Activas', 'Inventario', 'Historial', 'Rendimiento']
 
 function getRefillTabs(user) {
   if (!user || user.role === 'Administrador') return ALL_TABS
-  const tabPerm = user.permissions?.refillsTabs || user.role === 'Encargado' ? 'active+hist' : 'active'
+  const tabPerm = user.permissions?.refillsTabs || (user.role === 'Encargado' ? 'active+hist' : 'active')
   if (tabPerm === 'active')       return ['Botellas Activas']
   if (tabPerm === 'active+hist')  return ['Botellas Activas', 'Inventario', 'Historial']
   return ALL_TABS
@@ -29,103 +33,163 @@ export default function Refills() {
   const isAdmin  = currentUser?.role === 'Administrador'
   const TABS     = getRefillTabs(currentUser)
   const canViewRendimiento = hasFeature('refillRendimiento')
+  const activeLiquids = liquids.filter(l => l.active !== false)
+  const liquidInventoryValue = activeLiquids.reduce((a, l) => a + ((parseFloat(l.costPerBottle) || 0) * (parseInt(l.closedBottles) || 0)), 0)
+  const liquidSaleValue = activeLiquids.reduce((a, l) => a + ((parseFloat(l.pricePerBottle) || 0) * (parseInt(l.closedBottles) || 0)), 0)
 
   const [tab, setTab]           = useState('Botellas Activas')
   const [modal, setModal]       = useState(null)
   const [showUpgrade, setShowUpgrade] = useState(false)
+  const [savingLiquid, setSavingLiquid] = useState(false)
 
   const refillSales = sales.flatMap(s =>
-    s.refills.map(r => ({ ...r, date: s.date, time: s.time, user: s.user, saleId: s.id }))
+    (s.refills || []).map(r => ({ ...r, date: s.date, time: s.time, user: s.user, saleId: s.id }))
   )
   const bottleSaleLog = sales.flatMap(s =>
     (s.bottleSales || []).map(b => ({ ...b, date: s.date, time: s.time, user: s.user, saleId: s.id }))
   )
 
   // ── Abrir frasco para recargas ──
-  const handleOpenBottle = (liquid) => {
+  const handleOpenBottle = async (liquid) => {
     if (liquid.closedBottles < 1) { toast.error('No hay botellas cerradas disponibles'); return }
-    dispatch({ type: 'OPEN_BOTTLE', payload: { liquidId: liquid.id } })
-    toast.success(`✅ Frasco de "${liquid.name}" abierto. Saldo: ${liquid.activeCapacity} puntos`)
-    setModal(null)
+    if (Number(liquid.openBottleCount || (liquid.hasActive ? 1 : 0)) >= 3) { toast.error('El máximo es 3 frascos abiertos del mismo líquido'); return }
+    try {
+      const result = await httpsCallable(functions, 'openLiquidBottle')({ liquidId: liquid.id })
+      dispatch({ type: 'UPDATE_LIQUID', payload: { id: liquid.id, ...result.data.liquid } })
+      toast.success(`Frasco abierto. Saldo acumulado: ${result.data.liquid.activeSaldo} ml`)
+      setModal(null)
+    } catch (error) { toast.error(error.message || 'No se pudo abrir el frasco') }
   }
 
   // ── Ajuste manual de saldo ──
-  const handleAdjustSaldo = (liquidId, newSaldo, reason) => {
-    dispatch({ type: 'ADJUST_SALDO', payload: { liquidId, newSaldo: parseInt(newSaldo) } })
-    toast.success('Saldo ajustado correctamente')
-    setModal(null)
+  const handleAdjustSaldo = async (liquidId, newSaldo, reason) => {
+    if (!reason?.trim()) { toast.error('Indica el motivo del ajuste'); return }
+    try {
+      const result = await httpsCallable(functions, 'adjustLiquidBalance')({ liquidId, newBalance: Number(newSaldo), reason })
+      dispatch({ type: 'UPDATE_LIQUID', payload: { id: liquidId, ...result.data.liquid } })
+      toast.success('Saldo ajustado y registrado en la bitácora')
+      setModal(null)
+    } catch (error) { toast.error(error.message || 'No se pudo ajustar el saldo') }
   }
 
   // ── Venta de frasco completo ──
-  const handleSellBottle = (liquid, qty, payment) => {
+  const handleSellBottle = async (liquid, qty, payment) => {
     if (liquid.closedBottles < qty) { toast.error('Sin frascos cerrados disponibles'); return }
     const price   = liquid.pricePerBottle || Math.round(liquid.costPerBottle * 1.6)
     const taxRate = state.settings?.taxRate ?? 18
-    const tax     = Math.round(price * qty * taxRate / 100)
+    const rate    = taxRate / 100
+    const lineAmount = price * qty
+    const taxIncluded = liquid.taxIncluded === true
+    const tax     = taxIncluded
+      ? Math.round(lineAmount - (lineAmount / (1 + rate)))
+      : Math.round(lineAmount * rate)
+    const subtotal = taxIncluded ? lineAmount - tax : lineAmount
+    const total = taxIncluded ? lineAmount : lineAmount + tax
+    const netUnitPrice = taxIncluded && rate > 0 ? price / (1 + rate) : price
     const sale = {
+      id:          `s_${state.currentUser?.id || 'user'}_${Date.now()}_${genId('sale')}`,
       date:        new Date().toISOString().split('T')[0],
       time:        new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }),
       user:        state.currentUser?.name || 'Admin',
       userId:      state.currentUser?.id   || 'u1',
       customerId:  null, customerName: null,
       items: [], refills: [],
-      bottleSales: [{ liquidId: liquid.id, liquidName: liquid.name, qty, price, cost: liquid.costPerBottle }],
-      subtotal:    price * qty,
+      bottleSales: [{ liquidId: liquid.id, liquidName: liquid.name, qty, price, cost: liquid.costPerBottle, taxIncluded }],
+      subtotal,
       tax,
-      total:       price * qty + tax,
+      total,
       payment:     payment || 'Efectivo',
-      profit:      (price - liquid.costPerBottle) * qty,
+      profit:      (netUnitPrice - liquid.costPerBottle) * qty,
       notes:       'Frasco completo',
     }
-    dispatch({ type: 'SELL_CLOSED_BOTTLE', payload: { liquidId: liquid.id, qty } })
-    dispatch({ type: 'ADD_SALE', payload: sale })
-    toast.success(`🍶 ${qty} frasco(s) de "${liquid.name}" vendido(s) — ${fmt(sale.total)}`)
-    setModal(null)
+    try {
+      await httpsCallable(functions, 'commitSale')({ sale, cashSessionId: state.cashSession?.id || '' })
+      dispatch({ type: 'SELL_CLOSED_BOTTLE', payload: { liquidId: liquid.id, qty }, _skipSync: true })
+      dispatch({ type: 'ADD_SALE', payload: sale, _skipSync: true })
+      toast.success(`🍶 ${qty} frasco(s) de "${liquid.name}" vendido(s) — ${fmt(sale.total)}`)
+      setModal(null)
+    } catch (error) { toast.error(error.message || 'No se pudo registrar la venta') }
   }
 
   const handleNewLiquid = async (data) => {
+    if (savingLiquid) return
+    const name = data.name?.trim()
+    if (!name) { toast.error('Nombre requerido'); return }
+    if (hasDuplicateName(liquids, name)) {
+      toast.error(`Ya existe un líquido llamado "${name}"`)
+      return
+    }
+
     const liquidData = {
       ...data,
-      closedBottles:         parseInt(data.closedBottles)   || 0,
-      hasActive:             false,
-      activeSaldo:           0,
-      totalRechargesAllTime: 0,
-      totalRevenueAllTime:   0,
-      activeCapacity:        parseInt(data.activeCapacity)  || 100,
-      pointsR50:             parseInt(data.pointsR50)       || 10,
-      pointsR100:            parseInt(data.pointsR100)      || 20,
-      pointsR150:            parseInt(data.pointsR150)      || 30,
-      costPerBottle:         parseInt(data.costPerBottle)   || 0,
-      pricePerBottle:        parseInt(data.pricePerBottle)  || 0,
-      sizeML:                parseInt(data.sizeML)          || 100,
-      active:   true,
-      imageUrl: data.imageUrl || '',
-      color:    data.color    || '',
+      name,
+      sku:                    data.sku?.trim() || makeLiquidCode(liquids),
+      closedBottles:          parseInt(data.closedBottles)   || 0,
+      hasActive:              false,
+      activeSaldo:            0,
+      totalRechargesAllTime:  0,
+      totalRevenueAllTime:    0,
+      totalPointsConsumedAllTime: 0,
+      totalOpenedBottles: 0,
+      totalOpenedCapacity: 0,
+      openBottleCount: 0,
+      activeTotalCapacity: 0,
+      activeSessionIds: [],
+      halfBottleStock: 0,
+      activeCapacity:         parseInt(data.activeCapacity)  || 100,
+      pointsR50:              parseInt(data.pointsR50)       || 10,
+      pointsR100:             parseInt(data.pointsR100)      || 20,
+      pointsR150:             parseInt(data.pointsR150)      || 30,
+      costPerBottle:          parseInt(data.costPerBottle)   || 0,
+      pricePerBottle:         parseInt(data.pricePerBottle)  || 0,
+      taxIncluded:             data.taxIncluded === true,
+      sizeML:                 parseInt(data.sizeML)          || 100,
+      active:                 true,
+      imageUrl:               data.imageUrl || '',
+      color:                  data.color    || '',
     }
-    if (businessId) {
-      const saved = await bizAdd(businessId, 'liquids', liquidData)
-      if (saved?.id) {
-        dispatch({ type: 'ADD_LIQUID', payload: { ...liquidData, id: saved.id } })
-        toast.success(`Liquido "${liquidData.name}" registrado`)
-        setModal(null)
-        return
+
+    setSavingLiquid(true)
+    try {
+      if (businessId) {
+        const liquidId = data.id || genId('l')
+        const saved = await bizSet(businessId, 'liquids', liquidId, liquidData)
+        if (saved !== null) {
+          dispatch({ type: 'ADD_LIQUID', payload: { ...liquidData, id: liquidId } })
+          toast.success(`Liquido "${liquidData.name}" registrado`)
+          setModal(null)
+          return
+        }
+        throw new Error('No se pudo guardar el líquido en Firebase')
       }
+      dispatch({ type: 'ADD_LIQUID', payload: { ...liquidData, id: genId('l') } })
+      toast.success(`Liquido "${liquidData.name}" registrado`)
+      setModal(null)
+    } finally {
+      setSavingLiquid(false)
     }
-    dispatch({ type: 'ADD_LIQUID', payload: { ...liquidData, id: genId('l') } })
-    toast.success(`Liquido "${liquidData.name}" registrado`)
-    setModal(null)
   }
 
   const handleEditLiquid = async (data) => {
+    if (savingLiquid) return
+    const name = data.name?.trim()
+    if (!name) { toast.error('Nombre requerido'); return }
+    if (hasDuplicateName(liquids, name, data.id)) {
+      toast.error(`Ya existe un líquido llamado "${name}"`)
+      return
+    }
+
     const fields = {
-      name:             data.name,
+      name,
+      sku:              data.sku?.trim() || makeLiquidCode(liquids),
       brand:            data.brand,
       flavor:           data.flavor,
       category:         data.category,
       sizeML:           parseInt(data.sizeML)          || 100,
       costPerBottle:    parseInt(data.costPerBottle)   || 0,
       pricePerBottle:   parseInt(data.pricePerBottle)  || 0,
-      closedBottles:    parseInt(data.closedBottles)   ?? 0,
+      taxIncluded:       data.taxIncluded === true,
+      closedBottles:    parseInt(data.closedBottles)   || 0,
       pointsR50:        parseInt(data.pointsR50)       || 10,
       pointsR100:       parseInt(data.pointsR100)      || 20,
       pointsR150:       parseInt(data.pointsR150)      || 30,
@@ -134,21 +198,57 @@ export default function Refills() {
       imageUrl:         data.imageUrl || '',
       color:            data.color    || '',
     }
-    dispatch({ type: 'EDIT_LIQUID', payload: { id: data.id, ...fields } })
-    if (businessId && data.id) {
-      const ok = await bizUpdate(businessId, 'liquids', data.id, fields)
-      if (!ok) await bizSet(businessId, 'liquids', data.id, { ...fields })
+
+    setSavingLiquid(true)
+    try {
+      dispatch({ type: 'EDIT_LIQUID', payload: { id: data.id, ...fields } })
+      if (businessId && data.id) {
+        const ok = await bizUpdate(businessId, 'liquids', data.id, fields)
+        if (!ok) await bizSet(businessId, 'liquids', data.id, { ...fields })
+      }
+      toast.success(`"${name}" actualizado`)
+      setModal(null)
+    } finally {
+      setSavingLiquid(false)
     }
-    toast.success(`"${data.name}" actualizado`)
-    setModal(null)
   }
 
   const handleDeleteLiquid = async (liquid) => {
     if (!isAdmin) { toast.error('Solo el administrador puede eliminar liquidos'); return }
     dispatch({ type: 'DELETE_LIQUID', payload: liquid.id })
     if (businessId && liquid.id) await bizDelete(businessId, 'liquids', liquid.id)
+    if (liquid.imageUrl) await deleteImage(liquid.imageUrl)
     toast.success(`"${liquid.name}" eliminado`)
     setModal(null)
+  }
+
+  const handleImportLiquids = async (rows) => {
+    let imported = 0
+    let skipped = 0
+    const working = [...liquids]
+    for (const row of rows) {
+      if (!row.name?.trim()) { skipped += 1; continue }
+      const existing = findExistingByNameOrCode(working, row, 'sku')
+      const id = existing?.id || row.id || genId('l')
+      const payload = {
+        ...existing,
+        ...row,
+        id,
+        name: row.name.trim(),
+        sku: row.sku?.trim() || existing?.sku || makeLiquidCode(working),
+        active: row.active !== false,
+      }
+      dispatch({ type: existing ? 'UPDATE_LIQUID' : 'ADD_LIQUID', payload })
+      const pos = working.findIndex(l => l.id === id)
+      if (pos >= 0) working[pos] = payload
+      else working.push(payload)
+      if (businessId) {
+        const { id: liquidId, ...data } = payload
+        await bizSet(businessId, 'liquids', liquidId, data)
+      }
+      imported += 1
+    }
+    toast.success(`${imported} líquido(s) importado(s)/actualizado(s)${skipped ? `, ${skipped} omitido(s)` : ''}`)
   }
 
   return (
@@ -259,9 +359,25 @@ export default function Refills() {
       {/* ── Inventario ── */}
       {tab === 'Inventario' && (
         <div>
-          <div className="flex justify-between items-center mb-4">
-            <div className="text-sm text-slate-400">{liquids.length} líquidos registrados</div>
-            <button onClick={() => setModal({ type: 'new' })} className="btn-primary text-xs">+ Nuevo Líquido</button>
+          <div className="flex justify-between items-center gap-3 mb-4 flex-wrap">
+            <div className="flex gap-3 flex-wrap">
+              <div className="card px-4 py-2.5 flex items-center gap-2">
+                <span className="text-[#00e5a0] font-bold font-mono text-lg">{activeLiquids.length}</span>
+                <span className="text-xs text-slate-400">líquidos registrados</span>
+              </div>
+              <div className="card px-4 py-2.5 flex items-center gap-2">
+                <span className="text-[#00c4e8] font-bold font-mono text-sm">{fmt(liquidInventoryValue)}</span>
+                <span className="text-xs text-slate-400">valor en inventario</span>
+              </div>
+              <div className="card px-4 py-2.5 flex items-center gap-2">
+                <span className="text-[#00e5a0] font-bold font-mono text-sm">{fmt(liquidSaleValue)}</span>
+                <span className="text-xs text-slate-400">valor total de venta</span>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <ExcelDataActions entity="liquids" rows={liquids} onImport={handleImportLiquids} />
+              <button onClick={() => setModal({ type: 'new' })} className="btn-primary text-xs">+ Nuevo Líquido</button>
+            </div>
           </div>
           <div className="table-container overflow-x-auto">
             <table className="w-full">
@@ -369,7 +485,7 @@ export default function Refills() {
         canViewRendimiento ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
             {liquids.filter(l => l.hasActive || l.totalRechargesAllTime > 0).map(liquid => {
-              const r = getRendimientoReport(liquid)
+              const r = getRendimientoReport(liquid, refillSales)
               return (
                 <div key={liquid.id} className="card p-5 space-y-4">
                   <div className="font-display font-bold text-slate-200">{liquid.name} — Rendimiento</div>
@@ -472,7 +588,7 @@ export default function Refills() {
         <AdjustSaldoModal liquid={modal.data} onClose={() => setModal(null)} onSave={handleAdjustSaldo} />
       )}
       {modal?.type === 'detail' && (
-        <LiquidDetailModal liquid={modal.data} onClose={() => setModal(null)} />
+        <LiquidDetailModal liquid={modal.data} refillSales={refillSales} onClose={() => setModal(null)} />
       )}
 
       {showUpgrade && <UpgradeModal onClose={() => setShowUpgrade(false)} />}
@@ -495,12 +611,12 @@ function ConfirmOpenBottleModal({ liquid, onClose, onConfirm }) {
           <span>ℹ</span>
           <div>
             <strong>Abrir frasco</strong> destina esta botella para hacer recargas. No es una venta al cliente.
-            El saldo se reiniciará a <strong>{liquid.activeCapacity} puntos</strong>.
+            Se agregarán <strong>{liquid.activeCapacity} ml</strong> al saldo actual, sin perder lo que queda.
           </div>
         </div>
         {liquid.hasActive && (
           <div className="alert-warning text-xs">
-            ⚠ Ya hay una botella activa de este líquido. Al abrir otra, la botella activa actual quedará reemplazada.
+            El saldo del frasco actual se conservará y se sumará al nuevo. Puedes mantener hasta 3 frascos abiertos.
           </div>
         )}
         <div className="flex gap-2 justify-end">
@@ -568,9 +684,9 @@ function SellBottleModal({ liquid, onClose, onSell, settings }) {
   )
 }
 
-function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId }) {
+function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId, saving = false }) {
   const [form, setForm] = useState({
-    id:             liquid?.id            || '',
+    id:             liquid?.id            || genId('l'),
     name:           liquid?.name          || '',
     brand:          liquid?.brand         || '',
     flavor:         liquid?.flavor        || '',
@@ -586,8 +702,10 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId 
     sinNicotina:      !liquid?.nicotinaFreebase || liquid?.nicotinaFreebase === 'ninguna',
     nicotinaFreebase: (liquid?.nicotinaFreebase && liquid?.nicotinaFreebase !== 'ninguna') ? liquid.nicotinaFreebase : '',
     nicotinaSales:    (liquid?.nicotinaSales    && liquid?.nicotinaSales    !== 'ninguna') ? liquid.nicotinaSales    : '',
+    sku:      liquid?.sku      || '',
     imageUrl: liquid?.imageUrl || '',
     color:    liquid?.color    || '',
+    taxIncluded: liquid?.taxIncluded === true,
   })
   const [uploading, setUploading] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -595,13 +713,21 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId 
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 2 * 1024 * 1024) { toast.error('La imagen no puede superar 2MB'); return }
+
     setUploading(true)
-    const tempId = form.id || `temp_${Date.now()}`
-    const url = await uploadLiquidImage(businessId, tempId, file)
-    if (url) { set('imageUrl', url); set('color', ''); toast.success('Imagen subida') }
-    else toast.error('Error al subir imagen')
-    setUploading(false)
+    try {
+      const tempId = form.id || `temp_${Date.now()}`
+      const url = await uploadLiquidImage(businessId, tempId, file)
+      set('imageUrl', url)
+      set('color', '')
+      toast.success('Imagen subida')
+    } catch (err) {
+      console.error('Error al subir imagen de liquido:', err)
+      toast.error(err?.message || 'Error al subir imagen')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
   }
 
   return (
@@ -611,6 +737,7 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId 
           <div><label className="label">Nombre *</label><input className="input" value={form.name} onChange={e => set('name', e.target.value)} placeholder="Mango Ice" /></div>
           <div><label className="label">Marca</label><input className="input" value={form.brand} onChange={e => set('brand', e.target.value)} /></div>
         </div>
+        <div><label className="label">Código interno</label><input className="input font-mono" value={form.sku} onChange={e => set('sku', e.target.value)} placeholder="Se genera automático si lo dejas vacío" /></div>
         <div className="form-row">
           <div><label className="label">Sabor</label><input className="input" value={form.flavor} onChange={e => set('flavor', e.target.value)} /></div>
           <div>
@@ -624,6 +751,18 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId 
           <div><label className="label">Costo por Botella (RD$)</label><input className="input" type="number" value={form.costPerBottle} onChange={e => set('costPerBottle', e.target.value)} /></div>
           <div><label className="label">Precio Venta Frasco (RD$)</label><input className="input" type="number" value={form.pricePerBottle} onChange={e => set('pricePerBottle', e.target.value)} /></div>
         </div>
+        <label className="flex items-start gap-3 bg-[#101c35] border border-white/10 rounded-xl p-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.taxIncluded}
+            onChange={e => set('taxIncluded', e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded accent-[#00e5a0]"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-slate-300">ITBIS incluido en los precios de venta</span>
+            <span className="block text-xs text-slate-500 mt-0.5">Aplica al frasco y a las recargas: el precio mostrado ya contiene el 18% de ITBIS.</span>
+          </span>
+        </label>
         <div className="form-row">
           <div><label className="label">Tamano (ml)</label><input className="input" type="number" value={form.sizeML} onChange={e => set('sizeML', e.target.value)} /></div>
           <div><label className="label">Botellas cerradas</label><input className="input" type="number" value={form.closedBottles} onChange={e => set('closedBottles', e.target.value)} /></div>
@@ -687,8 +826,8 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId 
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={() => { if (!form.name) return toast.error('Nombre requerido'); onSave(form) }}>
-            {liquid ? 'Guardar Cambios' : 'Registrar Líquido'}
+          <button className="btn-primary" disabled={saving} onClick={async () => { if (!form.name) return toast.error('Nombre requerido'); await onSave(form) }}>
+            {saving ? 'Guardando...' : (liquid ? 'Guardar Cambios' : 'Registrar Líquido')}
           </button>
         </div>
       </div>
@@ -719,8 +858,8 @@ function AdjustSaldoModal({ liquid, onClose, onSave }) {
         <BottleProgress liquid={liquid} />
         <div>
           <label className="label">Nuevo saldo (puntos)</label>
-          <input className="input" type="number" min={0} max={liquid.activeCapacity} value={saldo} onChange={e => setSaldo(e.target.value)} />
-          <div className="text-xs text-slate-500 mt-1">Máximo: {liquid.activeCapacity} puntos</div>
+          <input className="input" type="number" min={0} max={liquid.activeTotalCapacity || liquid.activeCapacity} value={saldo} onChange={e => setSaldo(e.target.value)} />
+          <div className="text-xs text-slate-500 mt-1">Máximo acumulado: {liquid.activeTotalCapacity || liquid.activeCapacity} ml</div>
         </div>
         <div>
           <label className="label">Motivo *</label>
@@ -735,8 +874,8 @@ function AdjustSaldoModal({ liquid, onClose, onSave }) {
   )
 }
 
-function LiquidDetailModal({ liquid, onClose }) {
-  const r = getRendimientoReport(liquid)
+function LiquidDetailModal({ liquid, refillSales = [], onClose }) {
+  const r = getRendimientoReport(liquid, refillSales)
   return (
     <Modal title={`💧 ${liquid.name}`} onClose={onClose}>
       <div className="space-y-4">

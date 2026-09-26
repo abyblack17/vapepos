@@ -18,16 +18,19 @@ export default function Cash() {
   const [openAmount, setOpenAmount] = useState('2000')
   const [expenseForm, setExpenseForm] = useState({ amount: '', reason: '' })
   const [editingExpense, setEditingExpense] = useState(null)
+  const [editingCreditPayment, setEditingCreditPayment] = useState(null)
 
   const isAdmin    = currentUser?.role === 'Administrador'
   const isEncargado = currentUser?.role === 'Encargado'
   const canSeeHistory = isAdmin || isEncargado
 
-  const todaySales     = sales.filter(s => s.date === today())
-  const cashTotal      = (cashSession.openAmount || 0) + (cashSession.sales || 0) - (cashSession.expenses || 0)
+  const safeSales      = Array.isArray(sales) ? sales.filter(Boolean) : []
+  const safeSession    = cashSession || {}
+  const todaySales     = safeSales.filter(s => s?.date === today())
+  const cashTotal      = (Number(safeSession.openAmount) || 0) + (Number(safeSession.sales) || 0) - (Number(safeSession.expenses) || 0)
   const byPayment      = getSalesByPayment(todaySales)
-  const expenses       = cashSession.expenseList || []
-  const creditPayments = cashSession.creditPayments || []
+  const expenses       = Array.isArray(safeSession.expenseList) ? safeSession.expenseList.filter(Boolean) : []
+  const creditPayments = Array.isArray(safeSession.creditPayments) ? safeSession.creditPayments.filter(Boolean) : []
   const totalCredits   = state.customers?.reduce((a, c) => a + (c.creditBalance || 0), 0) || 0
   const totalSalesAmount = todaySales.reduce((a, s) => a + s.total, 0)
 
@@ -81,6 +84,31 @@ export default function Cash() {
   const handleDeleteExpense = (expense) => {
     dispatch({ type: 'DELETE_EXPENSE', payload: expense.id })
     toast.success('Egreso eliminado')
+  }
+
+  const handleEditCreditPayment = () => {
+    if (!editingCreditPayment) return
+    const amount = parseFloat(editingCreditPayment.amount)
+    if (isNaN(amount) || amount <= 0) return toast.error('Monto invalido')
+
+    const oldPayment = creditPayments.find(p => p?.id === editingCreditPayment.id)
+    const oldAmount = Number(oldPayment?.amount) || 0
+
+    if (editingCreditPayment.customerId) {
+      const customer = state.customers?.find(c => c.id === editingCreditPayment.customerId)
+      const maxAllowed = (Number(customer?.creditBalance) || 0) + oldAmount
+      if (amount > maxAllowed) return toast.error(`Maximo permitido: ${fmt(maxAllowed)}`)
+    }
+
+    dispatch({ type: 'EDIT_CREDIT_PAYMENT', payload: { ...editingCreditPayment, amount } })
+    setEditingCreditPayment(null)
+    toast.success('Abono actualizado')
+  }
+
+  const handleDeleteCreditPayment = (payment) => {
+    if (!payment?.id) return toast.error('No se pudo identificar el abono')
+    dispatch({ type: 'DELETE_CREDIT_PAYMENT', payload: payment.id, customerId: payment.customerId })
+    toast.success('Abono eliminado')
   }
 
   return (
@@ -266,20 +294,47 @@ export default function Cash() {
           {creditPayments.length > 0 && (
             <div className="card p-5">
               <div className="section-title">Abonos a Creditos Recibidos</div>
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                 {creditPayments.map((cp, i) => (
-                  <div key={i} className="flex items-center justify-between bg-[#101c35] rounded-lg px-3 py-2">
-                    <div>
-                      <div className="text-sm text-slate-200">{cp.concept}</div>
-                      <div className="text-xs text-slate-500">{cp.time} — {cp.date}</div>
-                    </div>
-                    <div className="font-mono font-bold text-[#00e5a0]">{fmt(cp.amount)}</div>
+                  <div key={cp.id || i} className="bg-[#101c35] rounded-lg px-3 py-2">
+                    {editingCreditPayment?.id && editingCreditPayment.id === cp.id ? (
+                      <div className="space-y-2">
+                        <div className="text-xs text-slate-400">{cp.concept || 'Abono a credito'}</div>
+                        <div className="flex gap-1">
+                          <input
+                            className="input flex-1 text-xs py-1 font-mono"
+                            type="number"
+                            min="1"
+                            value={editingCreditPayment.amount}
+                            onChange={e => setEditingCreditPayment(ed => ({ ...ed, amount: e.target.value }))}
+                          />
+                          <button onClick={handleEditCreditPayment} className="text-xs px-2 py-1 rounded bg-[#00e5a0]/20 text-[#00e5a0]">OK</button>
+                          <button onClick={() => setEditingCreditPayment(null)} className="text-xs px-2 py-1 rounded bg-white/10 text-slate-400">x</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm text-slate-200">{cp.concept || 'Abono a credito'}</div>
+                          <div className="text-xs text-slate-500">{cp.time || '—'} — {cp.date || '—'}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-mono font-bold text-[#00e5a0]">{fmt(Number(cp.amount) || 0)}</div>
+                          {isAdmin && cp.id && (
+                            <>
+                              <button onClick={() => setEditingCreditPayment({ ...cp, amount: Number(cp.amount) || 0 })} className="text-xs text-slate-400 hover:text-[#00e5a0] transition-colors" title="Editar abono">✎</button>
+                              <button onClick={() => handleDeleteCreditPayment(cp)} className="text-xs text-slate-400 hover:text-red-400 transition-colors" title="Eliminar abono">✕</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
               <div className="mt-3 pt-3 border-t border-white/10 flex justify-between">
                 <span className="font-semibold text-slate-200">Total abonos</span>
-                <span className="font-mono font-bold text-[#00e5a0]">{fmt(creditPayments.reduce((a, c) => a + c.amount, 0))}</span>
+                <span className="font-mono font-bold text-[#00e5a0]">{fmt(creditPayments.reduce((a, c) => a + (Number(c?.amount) || 0), 0))}</span>
               </div>
             </div>
           )}

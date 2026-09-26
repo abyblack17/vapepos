@@ -1,23 +1,32 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useApp } from '../../contexts/AppContext'
-import { fmt, formatDate } from '../../utils/helpers'
+import { fmt } from '../../utils/helpers'
 import toast from 'react-hot-toast'
+import { isBluetoothPrinterSupported, printSaleByBluetooth } from '../../services/bluetoothPrinterService'
 
 export function buildWhatsAppText(sale, settings) {
-  const biz    = settings?.businessName || 'VapePOS'
+  const biz = settings?.businessName || 'VapePOS'
   const footer = settings?.invoiceFooter || 'Gracias por su compra!'
-  const lines  = []
+  const lines = []
   lines.push(`*${biz}*`)
+  if (settings?.rnc) lines.push(`RNC: ${settings.rnc}`)
+  if (settings?.email) lines.push(settings.email)
   lines.push(`Factura ${sale.saleNumber}`)
   lines.push(`${sale.date}  ${sale.time}`)
+  if (sale.fiscal?.ncf) {
+    lines.push(`${sale.fiscal.typeLabel || 'Comprobante fiscal'}`)
+    lines.push(`NCF: ${sale.fiscal.ncf}`)
+    if (sale.fiscal.expiresAt) lines.push(`Vence NCF: ${sale.fiscal.expiresAt}`)
+  }
   if (sale.customerName) lines.push(`Cliente: ${sale.customerName}`)
+  if (sale.fiscal?.customer?.rnc || sale.customerRnc) lines.push(`RNC/Cédula Cliente: ${sale.fiscal?.customer?.rnc || sale.customerRnc}`)
   lines.push(`Cajero: ${sale.user}`)
   lines.push('-----------------')
-  if (sale.items?.length)      { lines.push('*Productos:*');        sale.items.forEach(i       => lines.push(`  ${i.name} x${i.qty}  ${fmt(i.price * i.qty)}`)) }
-  if (sale.refills?.length)    { lines.push('*Recargas:*');         sale.refills.forEach(r     => lines.push(`  ${r.liquidName} ${r.type}  ${fmt(r.price)}`)) }
-  if (sale.bottleSales?.length){ lines.push('*Frascos:*');          sale.bottleSales.forEach(b => lines.push(`  ${b.liquidName} x${b.qty}  ${fmt(b.price * b.qty)}`)) }
-  if (sale.services?.length)   { lines.push('*Servicios:*');        sale.services.forEach(s   => lines.push(`  ${s.name} x${s.qty}  ${fmt(s.price * s.qty)}`)) }
-  if (sale.discounts?.length)  { lines.push('*Descuentos:*');       sale.discounts.forEach(d  => lines.push(`  ${d.name}  -${fmt(d.amount)}`)) }
+  if (sale.items?.length) { lines.push('*Productos:*'); sale.items.forEach(i => lines.push(`  ${i.name} x${i.qty}  ${fmt(i.price * i.qty)}`)) }
+  if (sale.refills?.length) { lines.push('*Recargas:*'); sale.refills.forEach(r => lines.push(`  ${r.liquidName} ${r.type}  ${fmt(r.price)}`)) }
+  if (sale.bottleSales?.length) { lines.push('*Frascos:*'); sale.bottleSales.forEach(b => lines.push(`  ${b.liquidName} x${b.qty}  ${fmt(b.price * b.qty)}`)) }
+  if (sale.services?.length) { lines.push('*Servicios:*'); sale.services.forEach(s => lines.push(`  ${s.name} x${s.qty}  ${fmt(s.price * s.qty)}`)) }
+  if (sale.discounts?.length) { lines.push('*Descuentos:*'); sale.discounts.forEach(d => lines.push(`  ${d.name}  -${fmt(d.amount)}`)) }
   lines.push('-----------------')
   lines.push(`Subtotal: ${fmt(sale.subtotal)}`)
   if (sale.discountTotal > 0) lines.push(`Descuento: -${fmt(sale.discountTotal)}`)
@@ -33,100 +42,100 @@ export function buildWhatsAppText(sale, settings) {
   return lines.join('\n')
 }
 
+function ReceiptLine({ label, value, strong = false }) {
+  return (
+    <div className={`flex justify-between gap-3 ${strong ? 'font-bold text-sm' : 'text-xs'} text-black`}>
+      <span className="shrink-0">{label}</span>
+      <span className="font-mono text-right break-words">{value}</span>
+    </div>
+  )
+}
+
+function ReceiptSection({ title, children }) {
+  return (
+    <div className="mb-3">
+      <div className="text-xs font-bold text-black mb-2 uppercase tracking-wide">{title}</div>
+      <div className="space-y-1">{children}</div>
+    </div>
+  )
+}
+
 export default function InvoiceModal({ sale, onClose, onNewSale }) {
   const { state } = useApp()
   const { settings } = state
   const printRef = useRef(null)
+  const [downloading, setDownloading] = useState(false)
+  const [printingBluetooth, setPrintingBluetooth] = useState(false)
+  const [logoSrc, setLogoSrc] = useState(settings?.logoUrl || '')
+  const bluetoothSupported = isBluetoothPrinterSupported()
+
+  useEffect(() => {
+    setLogoSrc(settings?.logoUrl || '')
+  }, [settings?.logoUrl])
+
   if (!sale) return null
 
-  const handlePrint = () => {
-    const content = printRef.current?.innerHTML
-    if (!content) return
-    const paperSize  = settings?.paperSize  || '80mm'
-    const copies     = parseInt(settings?.printCopies || '1')
-    const paperWidth = paperSize === '58mm' ? '58mm' : '80mm'
-    const fontSize   = paperSize === '58mm' ? '10px' : '12px'
-    const padding    = paperSize === '58mm' ? '4px' : '8px'
-
-    // Build content for N copies separated by page breaks
-    let bodyContent = ''
-    for (let i = 0; i < copies; i++) {
-      bodyContent += `<div class="ticket">${content}</div>`
-      if (i < copies - 1) bodyContent += '<div style="page-break-after:always"></div>'
-    }
-
-    const win = window.open('', '_blank', 'width=400,height=700')
-    win.document.write(`<!DOCTYPE html><html><head>
-      <meta charset="UTF-8"><title>Factura ${sale.saleNumber}</title>
-      <style>
-        @page { margin: 0; size: ${paperWidth} auto; }
-        * { box-sizing:border-box; margin:0; padding:0; }
-        body { font-family:'Courier New',monospace; font-size:${fontSize}; color:#000; background:#fff; }
-        .ticket { width:${paperWidth}; padding:${padding}; }
-        .biz-name  { font-size:14px; font-weight:bold; text-align:center; margin-bottom:2px; }
-        .biz-sub   { font-size:10px; text-align:center; margin-bottom:8px; color:#444; }
-        .divider   { border-top:1px dashed #000; margin:6px 0; }
-        .row       { display:flex; justify-content:space-between; margin-bottom:2px; }
-        .label     { color:#555; font-size:10px; }
-        .section-title { font-weight:bold; margin:5px 0 2px; font-size:10px; text-transform:uppercase; }
-        .total-row { font-size:13px; font-weight:bold; }
-        .footer    { text-align:center; margin-top:10px; font-size:10px; color:#444; }
-        .discount  { color:#cc0000; }
-        .credit-row { border:1px dashed #cc0000; padding:3px; margin-top:3px; }
-        .change-row { border:1px solid #000; padding:3px; margin-top:3px; font-weight:bold; }
-        img.logo   { max-width:60px; max-height:40px; display:block; margin:0 auto 4px; }
-        @media print {
-          body { width:${paperWidth}; }
-          .ticket { width:100%; }
-        }
-      </style></head><body>${bodyContent}</body></html>`)
-    win.document.close()
-    setTimeout(() => win.print(), 300)
+  const ensureExternalScript = async (globalName, src) => {
+    if (window[globalName]) return
+    const script = document.createElement('script')
+    script.src = src
+    document.head.appendChild(script)
+    await new Promise((resolve, reject) => {
+      script.onload = resolve
+      script.onerror = reject
+    })
   }
 
-  const [downloading, setDownloading] = useState(false)
+  const prepareLogoForCapture = async () => {
+    const logoImg = printRef.current?.querySelector('img.logo')
+    if (!logoImg || !logoImg.src || logoImg.src.startsWith('data:')) return
+    try {
+      const resp = await fetch(logoImg.src, { mode: 'cors' })
+      const blob = await resp.blob()
+      const b64 = await new Promise(resolve => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.readAsDataURL(blob)
+      })
+      logoImg.src = b64
+      setLogoSrc(b64)
+      await new Promise(resolve => setTimeout(resolve, 120))
+    } catch (error) {
+      console.warn('No se pudo preparar el logo para exportar:', error)
+    }
+  }
+
+  const handleDownloadPDF = async () => {
+    if (!printRef.current) return
+    setDownloading(true)
+    try {
+      await ensureExternalScript('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
+      await ensureExternalScript('jspdf', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
+      await prepareLogoForCapture()
+      const canvas = await window.html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false })
+      const imgData = canvas.toDataURL('image/jpeg', 0.96)
+      const pdfWidth = settings?.paperSize === '80mm' ? 80 : settings?.paperSize === '48mm' ? 48 : 58
+      const pdfHeight = Math.max(120, (canvas.height * pdfWidth) / canvas.width)
+      const { jsPDF } = window.jspdf
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [pdfWidth, pdfHeight] })
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight)
+      pdf.save(`Factura-${sale.saleNumber}.pdf`)
+      toast.success('Factura PDF descargada')
+    } catch (err) {
+      toast.error('Error al generar PDF')
+      console.warn('PDF error:', err)
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const handleDownloadImage = async () => {
     if (!printRef.current) return
     setDownloading(true)
     try {
-      // Load html2canvas if not already loaded
-      if (!window.html2canvas) {
-        const script = document.createElement('script')
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'
-        document.head.appendChild(script)
-        await new Promise((resolve, reject) => {
-          script.onload = resolve
-          script.onerror = reject
-        })
-      }
-
-      // Pre-convert logo to base64 to avoid CORS issues
-      const logoImg = printRef.current.querySelector('img.logo')
-      if (logoImg && logoImg.src && !logoImg.src.startsWith('data:')) {
-        try {
-          const resp = await fetch(logoImg.src)
-          const blob = await resp.blob()
-          const b64  = await new Promise(res => {
-            const r = new FileReader()
-            r.onload = () => res(r.result)
-            r.readAsDataURL(blob)
-          })
-          logoImg.src = b64
-          await new Promise(r => setTimeout(r, 100))
-        } catch { /* logo fetch failed, skip */ }
-      }
-
-      // Capture only the receipt area
-      const canvas = await window.html2canvas(printRef.current, {
-        backgroundColor: '#0c1424',
-        scale: 2,
-        useCORS: true,
-        allowTaint: false,
-        logging: false,
-      })
-
-      // Download as JPG
+      await ensureExternalScript('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
+      await prepareLogoForCapture()
+      const canvas = await window.html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false })
       const link = document.createElement('a')
       link.download = `Factura-${sale.saleNumber}.jpg`
       link.href = canvas.toDataURL('image/jpeg', 0.95)
@@ -134,166 +143,113 @@ export default function InvoiceModal({ sale, onClose, onNewSale }) {
     } catch (err) {
       toast.error('Error al generar imagen')
       console.warn('html2canvas error:', err)
+    } finally {
+      setDownloading(false)
     }
-    setDownloading(false)
+  }
+
+  const handleWhatsAppShare = () => {
+    try {
+      const url = `https://wa.me/?text=${encodeURIComponent(buildWhatsAppText(sale, settings))}`
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      toast.error('No se pudo preparar la factura para WhatsApp')
+      console.warn('WhatsApp share error:', err)
+    }
+  }
+
+  const handleBluetoothPrint = async () => {
+    setPrintingBluetooth(true)
+    try {
+      const printerName = await printSaleByBluetooth(sale, settings)
+      toast.success(`Factura enviada a ${printerName}`)
+    } catch (err) {
+      toast.error(err?.message || 'No se pudo imprimir por Bluetooth')
+      console.warn('Bluetooth print error:', err)
+    } finally {
+      setPrintingBluetooth(false)
+    }
   }
 
   const biz = settings?.businessName || 'VapePOS'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 backdrop-blur-sm overflow-y-auto py-6" onClick={onClose}>
-      <div className="bg-[#0c1424] border border-white/10 rounded-2xl w-full max-w-md mx-4 my-auto" onClick={e => e.stopPropagation()}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-hidden" onClick={onClose}>
+      <div className="bg-[#0c1424] border border-white/10 rounded-2xl w-full max-w-md mx-auto h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-4 border-b border-white/10 shrink-0">
           <div>
             <div className="font-display font-bold text-slate-100">Factura</div>
             <div className="text-xs text-[#00e5a0] font-mono">{sale.saleNumber}</div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={handlePrint} className="text-xs px-3 py-1.5 rounded-lg bg-[#1a2848] border border-white/10 text-slate-400 hover:text-slate-200 transition-all">🖨 Imprimir</button>
-            <button onClick={handleDownloadImage} disabled={downloading}
-              className="text-xs px-3 py-1.5 rounded-lg bg-[#1a2848] border border-white/10 text-slate-400 hover:text-[#00c4e8] hover:border-[#00c4e8]/30 transition-all">
-              {downloading ? 'Generando...' : '📷 JPG'}
-            </button>
-            {sale.customerName && (
-              <button onClick={() => { const txt = buildWhatsAppText(sale, settings); window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`) }}
-                className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 border border-green-500/30 text-green-400 hover:bg-green-600/30 transition-all">WhatsApp</button>
-            )}
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/10 transition-all">x</button>
+          <div className="flex gap-2 flex-wrap justify-end">
+            <button onClick={handleDownloadPDF} disabled={downloading} className="text-xs px-3 py-1.5 rounded-lg bg-[#1a2848] border border-white/10 text-slate-300 hover:text-white transition-all">{downloading ? 'Generando...' : '📄 PDF'}</button>
+            <button onClick={handleBluetoothPrint} disabled={!bluetoothSupported || printingBluetooth} className="text-xs px-3 py-1.5 rounded-lg bg-[#00c4e8]/10 border border-[#00c4e8]/30 text-[#00c4e8] hover:bg-[#00c4e8]/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all">{printingBluetooth ? 'Enviando...' : 'Bluetooth'}</button>
+            <button onClick={handleDownloadImage} disabled={downloading} className="text-xs px-3 py-1.5 rounded-lg bg-[#1a2848] border border-white/10 text-slate-300 hover:text-[#00c4e8] hover:border-[#00c4e8]/30 transition-all">{downloading ? 'Generando...' : '📷 JPG'}</button>
+            <button onClick={handleWhatsAppShare} className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 border border-green-500/30 text-green-400 hover:bg-green-600/30 transition-all">WhatsApp</button>
+            <button onClick={onClose} aria-label="Cerrar factura" className="w-9 h-9 flex items-center justify-center rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 hover:text-white hover:bg-red-500/20 transition-all text-lg leading-none">×</button>
           </div>
         </div>
 
-        {/* Receipt body */}
-        <div className="px-6 py-5" ref={printRef}>
-          {settings?.printLogo !== false && settings?.logoUrl && (
-            <img src={settings.logoUrl} alt="logo" className="logo"
-              crossOrigin="anonymous"
-              style={{ maxWidth: '80px', maxHeight: '60px', display: 'block', margin: '0 auto 8px' }} />
-          )}
-          <div className="biz-name text-center font-bold text-slate-100 text-lg">{biz}</div>
-          {settings?.printAddress !== false && settings?.address && (
-            <div className="biz-sub text-center text-xs text-slate-400">{settings.address}</div>
-          )}
-          {settings?.printPhone !== false && settings?.phone && (
-            <div className="biz-sub text-center text-xs text-slate-400">Tel: {settings.phone}</div>
-          )}
-          <div className="divider border-t border-dashed border-white/20 my-3" />
-
-          <div className="space-y-1 text-xs text-slate-400 mb-3">
-            <div className="flex justify-between"><span>Factura</span><span className="font-mono text-slate-200">{sale.saleNumber}</span></div>
-            <div className="flex justify-between"><span>Fecha</span><span className="font-mono text-slate-200">{sale.date} {sale.time}</span></div>
-            {sale.customerName && <div className="flex justify-between"><span>Cliente</span><span className="font-mono text-slate-200">{sale.customerName}</span></div>}
-            <div className="flex justify-between"><span>Cajero</span><span className="font-mono text-slate-200">{sale.user}</span></div>
-          </div>
-
-          <div className="divider border-t border-dashed border-white/20 my-3" />
-
-          {/* Products */}
-          {sale.items?.length > 0 && (
-            <div className="mb-3">
-              <div className="text-xs font-bold text-slate-300 mb-2">Productos</div>
-              {sale.items.map((i, idx) => (
-                <div key={idx} className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>{i.name} x{i.qty}</span>
-                  <span className="font-mono text-slate-200">{fmt(i.price * i.qty)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Refills */}
-          {sale.refills?.length > 0 && (
-            <div className="mb-3">
-              <div className="text-xs font-bold text-[#00c4e8] mb-2">Recargas</div>
-              {sale.refills.map((r, idx) => (
-                <div key={idx} className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>{r.liquidName} {r.type}</span>
-                  <span className="font-mono text-slate-200">{fmt(r.price)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Bottle sales */}
-          {sale.bottleSales?.length > 0 && (
-            <div className="mb-3">
-              <div className="text-xs font-bold text-[#a78bfa] mb-2">Frascos</div>
-              {sale.bottleSales.map((b, idx) => (
-                <div key={idx} className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>{b.liquidName} x{b.qty}</span>
-                  <span className="font-mono text-slate-200">{fmt(b.price * b.qty)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Services */}
-          {sale.services?.length > 0 && (
-            <div className="mb-3">
-              <div className="text-xs font-bold text-[#f59e0b] mb-2">Servicios</div>
-              {sale.services.map((s, idx) => (
-                <div key={idx} className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>{s.name} x{s.qty}</span>
-                  <span className="font-mono text-slate-200">{fmt(s.price * s.qty)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Discounts */}
-          {sale.discounts?.length > 0 && (
-            <div className="mb-3">
-              <div className="text-xs font-bold text-red-400 mb-2">Descuentos</div>
-              {sale.discounts.map((d, idx) => (
-                <div key={idx} className="flex justify-between text-xs text-red-400 mb-1">
-                  <span>{d.name}</span>
-                  <span className="font-mono">-{fmt(d.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="divider border-t border-dashed border-white/20 my-3" />
-
-          {/* Totals */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-xs text-slate-400"><span>Subtotal</span><span className="font-mono">{fmt(sale.subtotal)}</span></div>
-            {sale.discountTotal > 0 && <div className="flex justify-between text-xs text-red-400"><span>Descuento</span><span className="font-mono">-{fmt(sale.discountTotal)}</span></div>}
-            {sale.tax > 0 && <div className="flex justify-between text-xs text-slate-400"><span>ITBIS ({settings?.taxRate}%)</span><span className="font-mono">{fmt(sale.tax)}</span></div>}
-            <div className="flex justify-between font-bold text-slate-100 pt-1 border-t border-white/10">
-              <span>TOTAL</span><span className="font-mono text-[#00e5a0] text-lg">{fmt(sale.total)}</span>
-            </div>
-            <div className="flex justify-between text-xs text-slate-400"><span>Metodo de pago</span><span className="font-mono text-slate-200">{sale.payment}</span></div>
-            {sale.amountReceived > sale.total && (
-              <>
-                <div className="flex justify-between text-xs text-slate-400"><span>Recibido</span><span className="font-mono text-slate-200">{fmt(sale.amountReceived)}</span></div>
-                <div className="flex justify-between text-sm font-bold text-[#00e5a0] bg-[#00e5a0]/10 rounded-lg px-2 py-1.5">
-                  <span>Cambio</span><span className="font-mono">{fmt(sale.change)}</span>
-                </div>
-              </>
+        <div className="flex-1 overflow-y-auto overscroll-contain bg-slate-200/5">
+          <div className="px-4 sm:px-6 py-5 bg-white text-black font-mono min-h-max" ref={printRef}>
+            {settings?.printLogo !== false && logoSrc && (
+              <img src={logoSrc} alt="Logo del negocio" className="logo" crossOrigin="anonymous" referrerPolicy="no-referrer" onError={() => setLogoSrc('')} style={{ maxWidth: '96px', maxHeight: '72px', display: 'block', margin: '0 auto 10px', objectFit: 'contain' }} />
             )}
-            {sale.creditAdded > 0 && (
-              <div className="flex justify-between text-sm font-bold text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5">
-                <span>A credito</span><span className="font-mono">{fmt(sale.creditAdded)}</span>
+            <div className="text-center font-bold text-black text-lg leading-tight">{biz}</div>
+            {settings?.printAddress !== false && settings?.address && <div className="text-center text-xs text-black">{settings.address}</div>}
+            {settings?.printPhone !== false && settings?.phone && <div className="text-center text-xs text-black">Tel: {settings.phone}</div>}
+            {settings?.printRNC !== false && settings?.rnc && <div className="text-center text-xs text-black">RNC: {settings.rnc}</div>}
+            {settings?.printEmail !== false && settings?.email && <div className="text-center text-xs text-black">{settings.email}</div>}
+            {settings?.legalName && settings.legalName !== biz && <div className="text-center text-xs text-black">Razón social: {settings.legalName}</div>}
+
+            {sale.fiscal?.ncf && (
+              <div className="mt-3 border border-black/30 bg-white rounded-lg p-2 text-center">
+                <div className="text-[10px] uppercase tracking-wider text-black font-bold">{sale.fiscal.typeLabel}</div>
+                <div className="text-sm font-mono font-bold text-black">NCF: {sale.fiscal.ncf}</div>
+                {sale.fiscal.expiresAt && <div className="text-[10px] text-black">Vence NCF: {sale.fiscal.expiresAt}</div>}
               </div>
             )}
-            {sale.creditAdded > 0 && (
-              <div className="flex justify-between text-xs text-red-400">
-                <span>Deuda total del cliente</span>
-                <span className="font-mono">{fmt((sale.creditPreviousBalance || 0) + sale.creditAdded)}</span>
+
+            <div className="border-t border-dashed border-black/40 my-3" />
+            <div className="space-y-1 mb-3">
+              <ReceiptLine label="Factura" value={sale.saleNumber} />
+              <ReceiptLine label="Fecha" value={`${sale.date} ${sale.time}`} />
+              {sale.customerName && <ReceiptLine label="Cliente" value={sale.customerName} />}
+              {(sale.fiscal?.customer?.rnc || sale.customerRnc) && <ReceiptLine label="RNC/Cédula" value={sale.fiscal?.customer?.rnc || sale.customerRnc} />}
+              {sale.fiscal?.customer?.address && <ReceiptLine label="Dirección" value={sale.fiscal.customer.address} />}
+              <ReceiptLine label="Cajero" value={sale.user} />
+            </div>
+            <div className="border-t border-dashed border-black/40 my-3" />
+
+            {sale.items?.length > 0 && <ReceiptSection title="Productos">{sale.items.map((i, idx) => <ReceiptLine key={idx} label={`${i.name} x${i.qty}`} value={fmt(i.price * i.qty)} />)}</ReceiptSection>}
+            {sale.refills?.length > 0 && <ReceiptSection title="Recargas">{sale.refills.map((r, idx) => <ReceiptLine key={idx} label={`${r.liquidName} ${r.type}`} value={fmt(r.price)} />)}</ReceiptSection>}
+            {sale.bottleSales?.length > 0 && <ReceiptSection title="Frascos">{sale.bottleSales.map((b, idx) => <ReceiptLine key={idx} label={`${b.liquidName} x${b.qty}`} value={fmt(b.price * b.qty)} />)}</ReceiptSection>}
+            {sale.services?.length > 0 && <ReceiptSection title="Servicios">{sale.services.map((s, idx) => <ReceiptLine key={idx} label={`${s.name} x${s.qty}`} value={fmt(s.price * s.qty)} />)}</ReceiptSection>}
+            {sale.discounts?.length > 0 && <ReceiptSection title="Descuentos">{sale.discounts.map((d, idx) => <ReceiptLine key={idx} label={d.name} value={`-${fmt(d.amount)}`} />)}</ReceiptSection>}
+
+            <div className="border-t border-dashed border-black/40 my-3" />
+            <div className="space-y-1.5">
+              <ReceiptLine label="Subtotal" value={fmt(sale.subtotal)} />
+              {sale.discountTotal > 0 && <ReceiptLine label="Descuento" value={`-${fmt(sale.discountTotal)}`} />}
+              {sale.tax > 0 && <ReceiptLine label={`ITBIS (${settings?.taxRate}%)`} value={fmt(sale.tax)} />}
+              <div className="flex justify-between gap-3 font-bold text-black pt-1 border-t border-black/20">
+                <span>TOTAL</span><span className="font-mono text-lg">{fmt(sale.total)}</span>
               </div>
-            )}
+              <ReceiptLine label="Método de pago" value={sale.payment} />
+              {sale.amountReceived > sale.total && <><ReceiptLine label="Recibido" value={fmt(sale.amountReceived)} /><ReceiptLine label="Cambio" value={fmt(sale.change)} strong /></>}
+              {sale.creditAdded > 0 && <><ReceiptLine label="A crédito" value={fmt(sale.creditAdded)} strong /><ReceiptLine label="Deuda total" value={fmt((sale.creditPreviousBalance || 0) + sale.creditAdded)} /></>}
+            </div>
+
+            <div className="border-t border-dashed border-black/40 my-3" />
+            <div className="text-center text-xs text-black">{settings?.invoiceFooter || 'Gracias por su compra!'}</div>
           </div>
 
-          <div className="divider border-t border-dashed border-white/20 my-3" />
-          <div className="text-center text-xs text-slate-500">{settings?.invoiceFooter || 'Gracias por su compra!'}</div>
+          {onNewSale && (
+            <div className="px-4 sm:px-6 py-4 bg-[#0c1424] border-t border-white/10 sticky bottom-0">
+              <button onClick={onNewSale} className="btn-primary w-full text-sm">+ Nueva Venta</button>
+            </div>
+          )}
         </div>
-
-        {onNewSale && (
-          <div className="px-6 pb-5">
-            <button onClick={onNewSale} className="btn-primary w-full text-sm">+ Nueva Venta</button>
-          </div>
-        )}
       </div>
     </div>
   )

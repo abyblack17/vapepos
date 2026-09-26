@@ -1,26 +1,50 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function active() { return signedIn() && request.auth.token.vapePosActive == true; }
+    function superAdmin() { return active() && request.auth.token.vapePosRole == 'superadmin'; }
+    function owns(businessId) { return active() && request.auth.token.vapePosBusinessId == businessId; }
+    function admin(businessId) { return owns(businessId) && request.auth.token.vapePosRole == 'Administrador'; }
+    function manager(businessId) { return owns(businessId) && request.auth.token.vapePosRole in ['Administrador', 'Encargado']; }
+    function validImage(maxSize) {
+      return request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= maxSize
+        && request.resource.contentType.matches('image/(jpeg|jpg|png|webp|gif|avif|heic|heif)');
+    }
 
-    // ── Logo del negocio ──────────────────────────────────
+    match /businesses/{businessId}/logo/{fileName} {
+      allow read: if owns(businessId) || superAdmin();
+      allow create, update: if admin(businessId) && validImage(5 * 1024 * 1024);
+      allow delete: if admin(businessId) || superAdmin();
+    }
     match /businesses/{businessId}/logo {
-      allow read:  if request.auth != null;
-      allow write: if request.auth != null
-                   && request.resource.size < 2 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
+      allow read: if owns(businessId) || superAdmin();
+      allow create, update: if admin(businessId) && validImage(5 * 1024 * 1024);
+      allow delete: if admin(businessId) || superAdmin();
     }
-
-    // ── Comprobantes de pago / upgrade requests ───────────
-    match /businesses/{businessId}/upgrade_requests/{file} {
-      allow read:  if request.auth != null;
-      allow write: if request.auth != null
-                   && request.resource.size < 5 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
+    match /businesses/{businessId}/products/{productId}/{fileName} {
+      allow read: if owns(businessId) || superAdmin();
+      allow create, update: if manager(businessId) && validImage(5 * 1024 * 1024);
+      allow delete: if manager(businessId) || superAdmin();
     }
-
-    // Bloqueo total de cualquier otra ruta
-    match /{allPaths=**} {
-      allow read, write: if false;
+    match /businesses/{businessId}/liquids/{liquidId}/{fileName} {
+      allow read: if owns(businessId) || superAdmin();
+      allow create, update: if manager(businessId) && validImage(5 * 1024 * 1024);
+      allow delete: if manager(businessId) || superAdmin();
     }
+    match /businesses/{businessId}/upgrade_requests/{fileName} {
+      allow read: if admin(businessId) || superAdmin();
+      allow create: if admin(businessId) && validImage(5 * 1024 * 1024);
+      allow update: if false;
+      allow delete: if superAdmin();
+    }
+    // Archivos públicos de DGII sin tokens permanentes en el código.
+    match /rnc/{fileName} {
+      allow read: if active();
+      allow write: if false;
+    }
+    match /{allPaths=**} { allow read, write: if false; }
   }
 }

@@ -44,7 +44,6 @@ export default function UpgradeModal({ onClose }) {
   const [preview, setPreview]         = useState(null)
   const [notes, setNotes]             = useState('')
   const [copied, setCopied]           = useState(null)
-  const [creatingCheckout, setCreatingCheckout] = useState(false)
 
   const handleCopy = (text, key) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -63,7 +62,7 @@ export default function UpgradeModal({ onClose }) {
     reader.readAsDataURL(f)
   }
 
-  // ── Activar prueba gratuita de 21 días — via Cloud Function ──
+  // ── Activar prueba gratuita de 30 días — via Cloud Function ──
   const handleActivateTrial = async () => {
     if (trialUsed) { toast.error('Ya usaste tu prueba gratuita'); return }
     setActivating(true)
@@ -84,37 +83,6 @@ export default function UpgradeModal({ onClose }) {
       setActivating(false)
     }
   }
-    // ── Pago automático con Lemon Squeezy ───────────────────────
-  const handleAutomaticCheckout = async () => {
-    if (!businessId) {
-      toast.error('No se encontró el negocio')
-      return
-    }
-
-    setCreatingCheckout(true)
-    try {
-      const fns = getFunctions()
-      const fn = httpsCallable(fns, 'createLemonSqueezyCheckout')
-
-      const result = await fn({
-        businessId,
-        email: currentUser?.email || '',
-      })
-
-      const checkoutUrl = result?.data?.url
-
-      if (!checkoutUrl) {
-        throw new Error('No se recibió la URL del checkout')
-      }
-
-      window.location.href = checkoutUrl
-    } catch (err) {
-      toast.error('No se pudo abrir el checkout: ' + (err.message || 'Error desconocido'))
-    } finally {
-      setCreatingCheckout(false)
-    }
-  }
-
   // ── Enviar comprobante ───────────────────────────────────────
   const handleSubmit = async () => {
     if (!file) { toast.error('Sube el comprobante de pago'); return }
@@ -181,33 +149,15 @@ export default function UpgradeModal({ onClose }) {
             </div>
           </div>
 
-          {/* Pago automático */}
-          <div className="bg-[#00e5a0]/10 border border-[#00e5a0]/20 rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-lg">💳</span>
-              <div className="font-semibold text-[#00e5a0] text-sm">Pago automático recomendado</div>
-            </div>
-            <div className="text-xs text-slate-400 mb-3">
-              Paga al instante con tarjeta y tu plan Pro se activa automáticamente al momento.
-            </div>
-            <button
-              onClick={handleAutomaticCheckout}
-              disabled={creatingCheckout}
-              className="w-full py-2.5 rounded-xl font-bold text-sm bg-[#00e5a0]/20 border border-[#00e5a0]/30 text-[#00e5a0] hover:bg-[#00e5a0]/30 transition-all disabled:opacity-60"
-            >
-              {creatingCheckout ? 'Abriendo checkout...' : '💳 Pagar ahora con tarjeta'}
-            </button>
-          </div>
-
           {/* Prueba gratuita */}
           {!trialUsed && !isPro && (
             <div className="bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-lg">🎁</span>
-                <div className="font-semibold text-[#a78bfa] text-sm">Prueba gratuita — 21 días</div>
+                <div className="font-semibold text-[#a78bfa] text-sm">Prueba gratuita — 30 días</div>
               </div>
               <div className="text-xs text-slate-400 mb-3">
-                Activa el plan Pro gratis por 21 días, sin necesidad de pagar.
+                Activa el plan Pro gratis por 30 días, sin necesidad de pagar.
                 Esta oferta es válida <strong className="text-slate-300">una única vez</strong> por negocio.
               </div>
               <button
@@ -215,7 +165,7 @@ export default function UpgradeModal({ onClose }) {
                 disabled={activating}
                 className="w-full py-2.5 rounded-xl font-bold text-sm bg-[#8b5cf6]/20 border border-[#8b5cf6]/30 text-[#a78bfa] hover:bg-[#8b5cf6]/30 transition-all disabled:opacity-60"
               >
-                {activating ? 'Activando...' : '🎁 Activar 21 días gratis'}
+                {activating ? 'Activando...' : '🎁 Activar 30 días gratis'}
               </button>
             </div>
           )}
@@ -230,8 +180,41 @@ export default function UpgradeModal({ onClose }) {
           {/* Datos de pago */}
           <div className="space-y-2">
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-  O si prefieres, realiza una transferencia por <span className="text-[#00e5a0]">RD$600</span> a:
-</div>
+              Elige cómo pagar <span className="text-[#00e5a0]">RD$600</span>:
+            </div>
+
+            {/* Toke — opción principal */}
+            <div className="bg-gradient-to-br from-[#5b43d6]/20 to-[#00c4e8]/10 border border-[#8b5cf6]/30 rounded-xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-sm font-bold text-[#a78bfa]">Toke — Pago con QR</div>
+                  <div className="text-xs text-slate-400 mt-0.5">Transferencia inmediata desde Toke, Popular o Qik</div>
+                </div>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#00e5a0] bg-[#00e5a0]/10 border border-[#00e5a0]/20 rounded-full px-2.5 py-1">
+                  Recomendado
+                </span>
+              </div>
+              <a
+                href="/images/payments/toke-qr.png"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block bg-white rounded-xl p-2"
+                title="Abrir QR de Toke en tamaño completo"
+              >
+                <img
+                  src="/images/payments/toke-qr.png"
+                  alt="Código QR de Toke para pagar la membresía de VapePos"
+                  className="w-full max-h-72 object-contain rounded-lg"
+                />
+              </a>
+              <div className="text-xs text-slate-400 text-center mt-2">
+                Escanea el código o tócalo para abrirlo en tamaño completo.
+              </div>
+            </div>
+
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider pt-2">
+              O paga mediante transferencia bancaria:
+            </div>
             {PAYMENT_INFO.map((bank, bi) => (
               <div key={bi} className="bg-[#101c35] rounded-xl p-4">
                 <div className={`text-xs font-bold ${bank.color} mb-2`}>{bank.icon} {bank.bank}</div>
@@ -341,7 +324,7 @@ export default function UpgradeModal({ onClose }) {
           <div>
             <div className="font-display font-bold text-slate-100 text-lg mb-2">¡Prueba activada!</div>
             <div className="text-slate-400 text-sm leading-relaxed">
-              Tienes <span className="text-[#00e5a0] font-bold">21 días</span> de plan Pro completamente gratis.
+              Tienes <span className="text-[#00e5a0] font-bold">30 días</span> de plan Pro completamente gratis.
               La página se actualizará en un momento.
             </div>
           </div>

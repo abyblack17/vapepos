@@ -26,8 +26,8 @@ export default function Register({ onGoLogin }) {
       toast.error('Las contraseñas no coinciden')
       return
     }
-    if (form.password.length < 6) {
-      toast.error('La contraseña debe tener al menos 6 caracteres')
+    if (form.password.length < 8) {
+      toast.error('La contraseña debe tener al menos 8 caracteres')
       return
     }
 
@@ -87,7 +87,7 @@ export default function Register({ onGoLogin }) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Contraseña *</label>
-                  <input className="input" type="password" placeholder="Min. 6 caracteres" value={form.password} onChange={e => set('password', e.target.value)} />
+                  <input className="input" type="password" minLength={8} maxLength={128} placeholder="Min. 8 caracteres" value={form.password} onChange={e => set('password', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">Confirmar contraseña *</label>

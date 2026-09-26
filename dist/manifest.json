@@ -1,18 +1,27 @@
 {
-  "id": "com.vapepos.app",
+  "id": "com.polancotech.vapepos",
   "name": "VapePOS — Sistema POS",
   "short_name": "VapePOS",
   "description": "Sistema POS completo para tiendas de vape. Gestiona ventas, inventario, recargas de liquidos, clientes, caja y reportes.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "scope": "/",
-  "display": "standalone",
-  "display_override": ["standalone"],
-  "orientation": "portrait",
+  "display": "fullscreen",
+  "display_override": [
+    "fullscreen",
+    "standalone",
+    "window-controls-overlay",
+    "minimal-ui"
+  ],
+  "orientation": "any",
   "background_color": "#080d18",
-  "theme_color": "#00e5a0",
+  "theme_color": "#080d18",
   "lang": "es",
   "dir": "ltr",
-  "categories": ["business", "productivity", "finance"],
+  "categories": [
+    "business",
+    "productivity",
+    "finance"
+  ],
   "icons": [
     {
       "src": "/icon-192.png",
@@ -103,8 +112,16 @@
       "short_name": "POS",
       "description": "Ir directamente al punto de venta",
       "url": "/",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ],
-  "prefer_related_applications": false
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 420
+  }
 }

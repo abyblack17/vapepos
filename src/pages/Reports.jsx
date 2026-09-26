@@ -1,13 +1,14 @@
 import React, { useState, useMemo } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useNavigation } from '../contexts/NavigationContext'
-import { exportSalesReport } from '../services/exportService'
+import { exportSalesReport, exportFiscalReport } from '../services/exportService'
 import StatCard from '../components/ui/StatCard'
 import ProGate from '../components/ui/ProGate'
 import UpgradeModal from '../components/ui/UpgradeModal'
+import Modal from '../components/ui/Modal'
 import InvoiceModal from '../components/pos/InvoiceModal'
 import { fmt, today } from '../utils/helpers'
-import { aggregateByPayment, getTopProducts, getWeeklyChartData } from '../services/salesService'
+import { aggregateByPayment, getTopProducts } from '../services/salesService'
 import { getRendimientoReport } from '../services/liquidService'
 import { usePlan } from '../hooks/usePlan'
 import {
@@ -37,7 +38,81 @@ function getPeriodRange(period) {
   if (period === 'daily')   { const t = fmtD(now); return { from: t, to: t, label: 'Hoy' } }
   if (period === 'weekly')  { const s = new Date(now); s.setDate(now.getDate()-6); return { from: fmtD(s), to: fmtD(now), label: 'Últimos 7 días' } }
   if (period === 'monthly') { const s = new Date(now.getFullYear(), now.getMonth(), 1); return { from: fmtD(s), to: fmtD(now), label: 'Este mes' } }
+  if (period === 'yearly')  { const s = new Date(now.getFullYear(), 0, 1); return { from: fmtD(s), to: fmtD(now), label: 'Este año' } }
   return { from: '', to: '', label: 'Todo el tiempo' }
+}
+
+const parseLocalDate = value => {
+  const [year, month, day] = (value || '').split('-').map(Number)
+  return year && month && day ? new Date(year, month - 1, day) : null
+}
+
+const shortDate = date => date.toLocaleDateString('es-DO', { day: '2-digit', month: 'short' }).replace('.', '')
+
+function getChartData(filteredSales, period, resolvedRange) {
+  const salesByDate = filteredSales.reduce((acc, sale) => {
+    if (!sale.date) return acc
+    const item = acc[sale.date] || { ventas: 0, ganancia: 0 }
+    item.ventas += Number(sale.total) || 0
+    item.ganancia += Number(sale.profit) || 0
+    acc[sale.date] = item
+    return acc
+  }, {})
+
+  if (period === 'daily') {
+    const hours = Array.from({ length: 24 }, (_, hour) => ({
+      name: `${String(hour).padStart(2, '0')}:00`, ventas: 0, ganancia: 0,
+    }))
+    filteredSales.forEach(sale => {
+      const hour = Number.parseInt(sale.time?.match(/(\d{1,2})/)?.[1], 10)
+      if (Number.isInteger(hour) && hour >= 0 && hour < 24) {
+        hours[hour].ventas += Number(sale.total) || 0
+        hours[hour].ganancia += Number(sale.profit) || 0
+      }
+    })
+    return { data: hours, title: 'Ventas de hoy por hora', interval: 2 }
+  }
+
+  const from = parseLocalDate(resolvedRange.from)
+  const to = parseLocalDate(resolvedRange.to)
+  if (!from || !to) {
+    const datedSales = filteredSales.filter(s => s.date).sort((a, b) => a.date.localeCompare(b.date))
+    if (!datedSales.length) return { data: [], title: 'Ventas de todo el período', interval: 0 }
+    return getChartData(filteredSales, 'custom', { from: datedSales[0].date, to: datedSales.at(-1).date })
+  }
+
+  const dayCount = Math.max(1, Math.round((to - from) / 86400000) + 1)
+  if (period === 'yearly' || dayCount > 90) {
+    const data = []
+    const cursor = new Date(from.getFullYear(), from.getMonth(), 1)
+    const limit = new Date(to.getFullYear(), to.getMonth(), 1)
+    while (cursor <= limit) {
+      const year = cursor.getFullYear()
+      const month = cursor.getMonth()
+      const totals = Object.entries(salesByDate).reduce((sum, [date, values]) => {
+        const parsed = parseLocalDate(date)
+        return parsed?.getFullYear() === year && parsed?.getMonth() === month
+          ? { ventas: sum.ventas + values.ventas, ganancia: sum.ganancia + values.ganancia }
+          : sum
+      }, { ventas: 0, ganancia: 0 })
+      data.push({ name: cursor.toLocaleDateString('es-DO', { month: 'short', year: '2-digit' }).replace('.', ''), ...totals })
+      cursor.setMonth(cursor.getMonth() + 1)
+    }
+    return { data, title: 'Ventas por mes', interval: 0 }
+  }
+
+  const data = []
+  const cursor = new Date(from)
+  while (cursor <= to) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`
+    data.push({ name: shortDate(cursor), ...(salesByDate[key] || { ventas: 0, ganancia: 0 }) })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return {
+    data,
+    title: period === 'weekly' ? 'Ventas de los últimos 7 días' : 'Ventas por día',
+    interval: dayCount > 16 ? Math.ceil(dayCount / 12) - 1 : 0,
+  }
 }
 
 const PAYMENT_BADGE = {
@@ -59,6 +134,7 @@ export default function Reports() {
   const [dateFrom,      setDateFrom]      = useState('')
   const [dateTo,        setDateTo]        = useState('')
   const [payFilter,     setPayFilter]     = useState('Todos')
+  const [fiscalFilter,  setFiscalFilter]  = useState('Todos')
   const [userFilter,    setUserFilter]    = useState('Todos')
   const [invoiceSale,   setInvoiceSale]   = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -92,9 +168,10 @@ export default function Reports() {
       if (minDateAllowed && s.date < minDateAllowed) return false
       const matchPay  = payFilter  === 'Todos' || s.payment === payFilter
       const matchUser = userFilter === 'Todos' || s.user === userFilter
-      return matchDate && matchPay && matchUser
+      const matchFiscal = fiscalFilter === 'Todos' || s.fiscal?.typeCode === fiscalFilter || (fiscalFilter === 'Sin NCF' && !s.fiscal?.ncf)
+      return matchDate && matchPay && matchUser && matchFiscal
     })
-  }, [sales, resolvedRange, payFilter, userFilter, minDateAllowed])
+  }, [sales, resolvedRange, payFilter, userFilter, fiscalFilter, minDateAllowed])
 
   const totalSales   = filteredSales.reduce((a, s) => a + s.total, 0)
   const totalProfit  = filteredSales.reduce((a, s) => a + (s.profit || 0), 0)
@@ -105,8 +182,9 @@ export default function Reports() {
   const byPayment      = aggregateByPayment(filteredSales)
   const paymentPieData = Object.entries(byPayment).map(([name, value]) => ({ name, value }))
   const topProducts    = getTopProducts(filteredSales)
-  const weeklyData     = getWeeklyChartData(sales)
+  const chart          = useMemo(() => getChartData(filteredSales, period, resolvedRange), [filteredSales, period, resolvedRange])
   const userNames      = ['Todos', ...new Set(sales.map(s => s.user).filter(Boolean))]
+  const fiscalInvoices = state.fiscalInvoices.filter(i => filteredSales.some(s => s.id === i.saleId || s.id === i.id))
 
   const handleDeleteSale = (sale) => {
     if (!isAdmin) { toast.error('Solo el administrador puede eliminar ventas'); return }
@@ -118,6 +196,11 @@ export default function Reports() {
   const handleExport = (format) => {
     if (!canExport) { setShowUpgrade(true); return }
     exportSalesReport(filteredSales, format, state.settings?.businessName, canViewProfit)
+  }
+
+  const handleFiscalExport = (format) => {
+    if (!isAdmin) { toast.error('Solo el administrador puede exportar reportes fiscales'); return }
+    exportFiscalReport(fiscalInvoices, format, state.settings?.businessName)
   }
 
   return (
@@ -140,6 +223,7 @@ export default function Reports() {
               { id: 'daily',   label: 'Hoy'    },
               { id: 'weekly',  label: 'Semana' },
               { id: 'monthly', label: 'Mes'    },
+              { id: 'yearly',  label: 'Año'    },
               { id: 'all',     label: 'Todo'   },
               { id: 'custom',  label: 'Fechas' },
             ].map(p => (
@@ -168,6 +252,9 @@ export default function Reports() {
           </select>
           <select className="select text-xs py-1.5 w-36" value={userFilter} onChange={e => setUserFilter(e.target.value)}>
             {userNames.map(u => <option key={u}>{u}</option>)}
+          </select>
+          <select className="select text-xs py-1.5 w-40" value={fiscalFilter} onChange={e => setFiscalFilter(e.target.value)}>
+            {['Todos','Sin NCF','B01','B02','B03','B04','B14','B15'].map(u => <option key={u}>{u}</option>)}
           </select>
 
           <div className="flex items-center gap-2 ml-auto">
@@ -201,14 +288,35 @@ export default function Reports() {
         <StatCard label="Frascos Vendidos" value={totalBottles}      sub="frascos completos al cliente"            accent="amber"  icon="🍶" onClick={() => navigate('refills')} />
       </div>
 
+      {isAdmin && fiscalInvoices.length > 0 && (
+        <div className="card p-5 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="section-title">Reporte fiscal NCF</div>
+              <div className="text-xs text-slate-500">{fiscalInvoices.length} facturas fiscales en el período · ITBIS {fmt(fiscalInvoices.reduce((a,i)=>a+(i.tax||0),0))}</div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handleFiscalExport('excel')} className="text-xs px-2.5 py-1.5 rounded-lg border border-white/10 text-slate-400 hover:text-[#00e5a0] hover:border-[#00e5a0]/30 transition-all">📊 Fiscal Excel</button>
+              <button onClick={() => handleFiscalExport('pdf')} className="text-xs px-2.5 py-1.5 rounded-lg border border-white/10 text-slate-400 hover:text-[#a78bfa] hover:border-[#a78bfa]/30 transition-all">📄 Fiscal PDF</button>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-64 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-slate-500 border-b border-white/10"><tr><th className="text-left py-2">Fecha</th><th className="text-left">Tipo</th><th className="text-left">NCF</th><th className="text-left">Cliente</th><th className="text-right">ITBIS</th><th className="text-right">Total</th></tr></thead>
+              <tbody>{fiscalInvoices.slice(0, 20).map(i => <tr key={i.id} className="border-b border-white/5 text-slate-300"><td className="py-2">{i.date}</td><td>{i.typeCode}</td><td className="font-mono">{i.ncf}</td><td>{i.customerName || 'Consumidor Final'}</td><td className="text-right font-mono">{fmt(i.tax)}</td><td className="text-right font-mono text-[#00e5a0]">{fmt(i.total)}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Charts row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
         <div className="col-span-2 card p-5">
-          <div className="section-title mb-4">Ventas por Día (últimos 7 días)</div>
+          <div className="section-title mb-4">{chart.title}</div>
           <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={weeklyData}>
+            <BarChart data={chart.data}>
               <CartesianGrid stroke="rgba(255,255,255,0.04)" />
-              <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="name" interval={chart.interval} tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
               <Tooltip content={<CustomTooltip />} />
               <Bar dataKey="ventas"   name="Ventas"   fill="#00e5a0" radius={[4,4,0,0]} />
@@ -344,18 +452,15 @@ export default function Reports() {
       </div>
 
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setDeleteConfirm(null)}>
-          <div className="bg-[#0c1424] border border-white/10 rounded-2xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
-            <div className="font-display font-bold text-slate-100 mb-3">Eliminar Venta</div>
-            <div className="alert-danger text-sm mb-4">
-              ¿Eliminar la venta <strong>{deleteConfirm.saleNumber}</strong> por {fmt(deleteConfirm.total)}? Esta acción no se puede deshacer.
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button className="btn-secondary" onClick={() => setDeleteConfirm(null)}>Cancelar</button>
-              <button className="btn-danger" onClick={() => handleDeleteSale(deleteConfirm)}>Eliminar</button>
-            </div>
+        <Modal title="Eliminar Venta" onClose={() => setDeleteConfirm(null)} size="sm">
+          <div className="alert-danger text-sm mb-4">
+            ¿Eliminar la venta <strong>{deleteConfirm.saleNumber}</strong> por {fmt(deleteConfirm.total)}? Esta acción no se puede deshacer.
           </div>
-        </div>
+          <div className="flex gap-2 justify-end">
+            <button className="btn-secondary" onClick={() => setDeleteConfirm(null)}>Cancelar</button>
+            <button className="btn-danger" onClick={() => handleDeleteSale(deleteConfirm)}>Eliminar</button>
+          </div>
+        </Modal>
       )}
 
       {showUpgrade && <UpgradeModal onClose={() => setShowUpgrade(false)} />}

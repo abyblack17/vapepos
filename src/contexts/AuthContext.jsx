@@ -73,6 +73,18 @@ export function AuthProvider({ children }) {
         return
       }
 
+      try {
+        const syncClaims = httpsCallable(getFunctions(), 'syncMyAccessClaims')
+        await syncClaims()
+        await firebaseUser.getIdToken(true)
+      } catch (claimError) {
+        console.error('No se pudieron actualizar los permisos de Storage:', claimError)
+        await signOut(auth)
+        setError('No se pudieron validar los permisos de almacenamiento. Vuelve a iniciar sesión.')
+        setLoading(false)
+        return
+      }
+
       setUserProfile(profile)
 
       // Superadmin no tiene negocio asociado
@@ -177,6 +189,17 @@ export function AuthProvider({ children }) {
     }
   }
 
+  const updateUserPermissions = async (targetUid, permissions) => {
+    try {
+      const fns = getFunctions()
+      const fn = httpsCallable(fns, 'updateUserPermissions')
+      const result = await fn({ targetUid, permissions })
+      return { success: true, permissions: result.data?.permissions || permissions }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  }
+
   // ── Deactivate user ──────────────────────────────────────
   const deactivateUser = async (targetUid) => {
     try {
@@ -240,7 +263,7 @@ export function AuthProvider({ children }) {
       authUser, currentUser, userProfile, business,
       businessId, loading, error, isAuthenticated,
       login, logout, registerBusiness,
-      addEmployee, updateUserRole, deactivateUser, deleteUser,
+      addEmployee, updateUserRole, updateUserPermissions, deactivateUser, deleteUser,
       resetPassword, setError,
     }}>
       {children}

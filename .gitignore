@@ -1,1 +1,10 @@
 node_modules
+.env
+.env.local
+.env.*.local
+!.env.example
+functions/lib
+*.log
+release/
+*.zip
+.firebase/

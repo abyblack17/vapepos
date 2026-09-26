@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "220735440943",
+    "project_id": "vape-pos-7819a",
+    "storage_bucket": "vape-pos-7819a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:220735440943:android:8f47bf530504bfa2055eda",
+        "android_client_info": {
+          "package_name": "com.polancotech.vapepos2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDju3NUSLy2A9vQUL7a6req1Ykw_zILS8Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

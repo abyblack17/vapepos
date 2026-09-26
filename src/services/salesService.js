@@ -9,7 +9,7 @@ import {
   bizGetAll,
   bizDelete,
 } from './firestoreService'
-import { today } from '../utils/helpers'
+import { localDateKey, today } from '../utils/helpers'
 
 const COL = 'sales'
 
@@ -79,12 +79,16 @@ export function getTopProducts(sales, topN = 5) {
 }
 
 export function getWeeklyChartData(sales) {
-  const days = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
-  const now  = new Date()
+  const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+  const now = new Date()
+  const sunday = new Date(now)
+  sunday.setHours(0, 0, 0, 0)
+  sunday.setDate(now.getDate() - now.getDay())
+
   return days.map((label, i) => {
-    const d = new Date(now)
-    d.setDate(now.getDate() - (6 - i))
-    const dateStr  = d.toISOString().split('T')[0]
+    const d = new Date(sunday)
+    d.setDate(sunday.getDate() + i)
+    const dateStr = localDateKey(d)
     const daySales = sales.filter(s => s.date === dateStr)
     return {
       name:     label,
@@ -92,4 +96,25 @@ export function getWeeklyChartData(sales) {
       ganancia: daySales.reduce((a, s) => a + (s.profit || 0), 0),
     }
   })
+}
+
+export function getLast7DaysChartData(sales) {
+  const now = new Date()
+  const days = []
+
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const d = new Date(now)
+    d.setHours(0, 0, 0, 0)
+    d.setDate(now.getDate() - offset)
+    const dateStr = localDateKey(d)
+    const daySales = sales.filter(s => s.date === dateStr)
+    days.push({
+      name: d.toLocaleDateString('es-DO', { weekday: 'short' }).replace('.', ''),
+      date: dateStr,
+      ventas: daySales.reduce((a, s) => a + s.total, 0),
+      ganancia: daySales.reduce((a, s) => a + (s.profit || 0), 0),
+    })
+  }
+
+  return days
 }

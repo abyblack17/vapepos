@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { db } from '../config/firebase'
+import { db, storage } from '../config/firebase'
 import {
   collection, getDocs, query, orderBy as fbOrderBy,
-  updateDoc, deleteDoc, doc, addDoc, serverTimestamp,
+  updateDoc, deleteDoc, doc, addDoc, serverTimestamp, writeBatch,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
+import { ref as storageRef, listAll, deleteObject } from 'firebase/storage'
 import { fmt } from '../utils/helpers'
 import toast from 'react-hot-toast'
 
@@ -17,6 +19,30 @@ const TYPE_COLORS = {
   consulta:   'text-[#00c4e8] bg-[#00c4e8]/10 border-[#00c4e8]/20',
 }
 const STATUS_BADGE = { nuevo: 'badge-red', leido: 'badge-blue', resuelto: 'badge-green' }
+
+const BUSINESS_SUBCOLLECTIONS = [
+  'products', 'liquids', 'customers', 'suppliers', 'sales', 'purchases',
+  'cash_sessions', 'settings', 'fiscalConfig', 'ncfSequences', 'fiscalInvoices',
+  'suggestions', 'upgrade_requests', 'audit_logs',
+]
+
+const toDateInputValue = (value) => {
+  if (!value) return ''
+  const d = value?.toDate?.() || new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toISOString().slice(0, 10)
+}
+
+const addMonthsDateInput = (months = 1) => {
+  const d = new Date()
+  d.setMonth(d.getMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
+
+const endOfDayFromInput = (dateStr) => {
+  const d = new Date(`${dateStr}T23:59:59`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
 
 const ts = (seconds) => seconds ? new Date(seconds * 1000).toLocaleDateString('es-DO') : '—'
 
@@ -43,6 +69,13 @@ export default function SuperAdmin() {
   const [msgModal, setMsgModal]             = useState(null)
   const [msgText, setMsgText]               = useState('')
   const [sendingMsg, setSendingMsg]         = useState(false)
+  const [editingUser, setEditingUser]       = useState(null)
+  const [userForm, setUserForm]             = useState({ displayName: '', email: '', password: '', role: 'Cajero', active: true })
+  const [savingUser, setSavingUser]         = useState(false)
+  const [planModal, setPlanModal]           = useState(null)
+  const [planExpiryInput, setPlanExpiryInput] = useState('')
+  const [savingPlanExpiry, setSavingPlanExpiry] = useState(false)
+  const [deletingBizId, setDeletingBizId]   = useState(null)
 
   useEffect(() => { loadAll() }, [])
 
@@ -170,6 +203,105 @@ export default function SuperAdmin() {
     } catch (err) { toast.error('Error: ' + err.message) }
   }
 
+  const openPlanExpiryModal = (biz) => {
+    setPlanModal(biz)
+    setPlanExpiryInput(toDateInputValue(biz.planExpiresAt) || addMonthsDateInput(1))
+  }
+
+  const savePlanExpiry = async () => {
+    if (!planModal) return
+    const expiresAt = endOfDayFromInput(planExpiryInput)
+    if (!expiresAt) return toast.error('Selecciona una fecha válida')
+    setSavingPlanExpiry(true)
+    try {
+      const updates = {
+        plan: 'pro',
+        planExpiresAt: expiresAt,
+        planActivatedAt: planModal.planActivatedAt || new Date(),
+        updatedAt: serverTimestamp(),
+      }
+      await updateDoc(doc(db, 'businesses', planModal.id), updates)
+      setBusinesses(prev => prev.map(b => b.id === planModal.id ? { ...b, ...updates } : b))
+      if (selectedBiz?.id === planModal.id) setSelectedBiz(prev => ({ ...prev, ...updates }))
+      setPlanModal(null)
+      toast.success(`Vencimiento Pro actualizado para "${planModal.name}"`)
+    } catch (err) {
+      toast.error('Error actualizando fecha: ' + err.message)
+    }
+    setSavingPlanExpiry(false)
+  }
+
+  const deleteCollectionDocs = async (colRef) => {
+    const snap = await getDocs(colRef)
+    let batch = writeBatch(db)
+    let count = 0
+    for (const d of snap.docs) {
+      batch.delete(d.ref)
+      count++
+      if (count >= 450) {
+        await batch.commit()
+        batch = writeBatch(db)
+        count = 0
+      }
+    }
+    if (count > 0) await batch.commit()
+  }
+
+  const deleteStorageFolder = async (path) => {
+    try {
+      const folderRef = storageRef(storage, path)
+      const res = await listAll(folderRef)
+      await Promise.all(res.items.map(item => deleteObject(item).catch(() => null)))
+      for (const prefix of res.prefixes) {
+        await deleteStorageFolder(prefix.fullPath)
+      }
+    } catch (err) {
+      console.warn('deleteStorageFolder:', err.message)
+    }
+  }
+
+  const deleteBusinessPermanent = async (biz) => {
+    const bizUsers = allUsers.filter(u => u.businessId === biz.id && u.role !== 'superadmin')
+    const msg = `¿Eliminar PERMANENTEMENTE el negocio "${biz.name}"?\n\nSe borrarán sus datos de Firestore, archivos de Storage y ${bizUsers.length} usuario(s) relacionado(s).\n\nEscribe ELIMINAR para confirmar.`
+    const confirmText = prompt(msg)
+    if (confirmText !== 'ELIMINAR') return
+
+    setDeletingBizId(biz.id)
+    try {
+      const fns = getFunctions()
+      const deleteUserFn = httpsCallable(fns, 'deleteUserAsSuperAdmin')
+
+      for (const colName of BUSINESS_SUBCOLLECTIONS) {
+        await deleteCollectionDocs(collection(db, 'businesses', biz.id, colName))
+      }
+
+      await deleteStorageFolder(`businesses/${biz.id}`)
+
+      for (const user of bizUsers) {
+        try {
+          await deleteUserFn({ targetUid: user.id })
+        } catch (err) {
+          console.warn('delete user failed:', user.email, err.message)
+        }
+      }
+
+      await deleteDoc(doc(db, 'businesses', biz.id))
+
+      setBusinesses(prev => prev.filter(b => b.id !== biz.id))
+      setAllUsers(prev => prev.filter(u => u.businessId !== biz.id))
+      setSuggestions(prev => prev.filter(s => s.bizId !== biz.id))
+      setUpgradeRequests(prev => prev.filter(r => r.bizId !== biz.id))
+      if (selectedBiz?.id === biz.id) {
+        setSelectedBiz(null)
+        setBizSales([])
+      }
+      toast.success('Negocio eliminado completamente')
+    } catch (err) {
+      toast.error('Error eliminando negocio: ' + err.message)
+    }
+    setDeletingBizId(null)
+  }
+
   const toggleBusiness = async (biz) => {
     await updateDoc(doc(db, 'businesses', biz.id), { active: !biz.active })
     setBusinesses(prev => prev.map(b => b.id === biz.id ? { ...b, active: !b.active } : b))
@@ -177,9 +309,62 @@ export default function SuperAdmin() {
   }
 
   const toggleUser = async (user) => {
-    await updateDoc(doc(db, 'users', user.id), { active: !user.active })
-    setAllUsers(prev => prev.map(u => u.id === user.id ? { ...u, active: !user.active } : u))
-    toast.success(`Usuario ${user.active ? 'desactivado' : 'activado'}`)
+    try {
+      const fns = getFunctions()
+      const fn = httpsCallable(fns, 'updateUserAsSuperAdmin')
+      await fn({ targetUid: user.id, active: !user.active })
+      setAllUsers(prev => prev.map(u => u.id === user.id ? { ...u, active: !user.active } : u))
+      toast.success(`Usuario ${user.active ? 'desactivado' : 'activado'}`)
+    } catch (err) { toast.error('Error: ' + err.message) }
+  }
+
+  const openEditUser = (user) => {
+    setEditingUser(user)
+    setUserForm({
+      displayName: user.displayName || '',
+      email: user.email || '',
+      password: '',
+      role: user.role || 'Cajero',
+      active: user.active !== false,
+    })
+  }
+
+  const saveUserChanges = async () => {
+    if (!editingUser) return
+    if (!userForm.email.trim()) return toast.error('El correo es obligatorio')
+    if (userForm.password && userForm.password.length < 6) return toast.error('La contraseña debe tener mínimo 6 caracteres')
+    setSavingUser(true)
+    try {
+      const fns = getFunctions()
+      const fn = httpsCallable(fns, 'updateUserAsSuperAdmin')
+      const payload = {
+        targetUid: editingUser.id,
+        displayName: userForm.displayName.trim(),
+        email: userForm.email.trim().toLowerCase(),
+        role: userForm.role,
+        active: !!userForm.active,
+      }
+      if (userForm.password) payload.password = userForm.password
+      await fn(payload)
+      setAllUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...payload, id: editingUser.id } : u))
+      setEditingUser(null)
+      toast.success('Usuario actualizado')
+    } catch (err) {
+      toast.error('Error: ' + (err.message || 'No se pudo actualizar'))
+    }
+    setSavingUser(false)
+  }
+
+  const deleteUserPermanent = async (user) => {
+    if (!confirm(`¿Eliminar permanentemente al usuario ${user.email}? Esta acción no elimina el negocio.`)) return
+    try {
+      const fns = getFunctions()
+      const fn = httpsCallable(fns, 'deleteUserAsSuperAdmin')
+      await fn({ targetUid: user.id })
+      setAllUsers(prev => prev.filter(u => u.id !== user.id))
+      if (editingUser?.id === user.id) setEditingUser(null)
+      toast.success('Usuario eliminado permanentemente')
+    } catch (err) { toast.error('Error: ' + (err.message || 'No se pudo eliminar')) }
   }
 
   // ── Sugerencias ──────────────────────────────────────────
@@ -461,6 +646,10 @@ export default function SuperAdmin() {
                           }`}>
                           {b.plan === 'pro' ? '↓ Básico' : '↑ Pro'}
                         </button>
+                        <button onClick={() => openPlanExpiryModal(b)}
+                          className="flex-1 text-xs px-3 py-2 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
+                          📅 Fecha Pro
+                        </button>
                         <button onClick={() => toggleBusiness(b)}
                           className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
                             b.active !== false
@@ -472,6 +661,10 @@ export default function SuperAdmin() {
                         <button onClick={() => { setMsgModal(b); setMsgText('') }}
                           className="flex-1 text-xs px-3 py-2 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
                           ✉ Mensaje
+                        </button>
+                        <button onClick={() => deleteBusinessPermanent(b)} disabled={deletingBizId === b.id}
+                          className="flex-1 text-xs px-3 py-2 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50">
+                          {deletingBizId === b.id ? 'Eliminando...' : '🗑 Eliminar'}
                         </button>
                       </div>
                     </div>
@@ -524,6 +717,10 @@ export default function SuperAdmin() {
                                 }`}>
                                 {b.plan === 'pro' ? 'Bajar a Básico' : 'Subir a Pro'}
                               </button>
+                              <button onClick={() => openPlanExpiryModal(b)}
+                                className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
+                                Fecha Pro
+                              </button>
                               <button onClick={() => toggleBusiness(b)}
                                 className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
                                   b.active !== false
@@ -535,6 +732,10 @@ export default function SuperAdmin() {
                               <button onClick={() => { setMsgModal(b); setMsgText('') }}
                                 className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
                                 ✉ Mensaje
+                              </button>
+                              <button onClick={() => deleteBusinessPermanent(b)} disabled={deletingBizId === b.id}
+                                className="text-xs px-2.5 py-1 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50">
+                                {deletingBizId === b.id ? 'Eliminando...' : 'Eliminar'}
                               </button>
                             </div>
                           </td>
@@ -649,12 +850,20 @@ export default function SuperAdmin() {
                       </div>
                       <div className="flex items-center justify-between text-xs text-slate-500">
                         <span>🏪 {biz?.name || '—'} · {ts(u.createdAt?.seconds)}</span>
-                        <button onClick={() => toggleUser(u)}
-                          className={`px-3 py-1.5 rounded-lg border transition-all ${
-                            u.active ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
-                          }`}>
-                          {u.active ? 'Desactivar' : 'Activar'}
-                        </button>
+                        <div className="flex gap-2 flex-wrap justify-end">
+                          <button onClick={() => openEditUser(u)} className="px-3 py-1.5 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
+                            Editar
+                          </button>
+                          <button onClick={() => toggleUser(u)}
+                            className={`px-3 py-1.5 rounded-lg border transition-all ${
+                              u.active ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
+                            }`}>
+                            {u.active ? 'Desactivar' : 'Activar'}
+                          </button>
+                          <button onClick={() => deleteUserPermanent(u)} className="px-3 py-1.5 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all">
+                            Eliminar
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )
@@ -669,7 +878,7 @@ export default function SuperAdmin() {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-white/10">
-                      {['Usuario', 'Email', 'Rol', 'Negocio', 'Estado', 'Registro', 'Accion'].map(h => (
+                      {['Usuario', 'Email', 'Rol', 'Negocio', 'Estado', 'Registro', 'Acciones'].map(h => (
                         <th key={h} className="table-header">{h}</th>
                       ))}
                     </tr>
@@ -694,12 +903,20 @@ export default function SuperAdmin() {
                           <td className="table-cell"><span className={`badge ${u.active ? 'badge-green' : 'badge-red'}`}>{u.active ? 'Activo' : 'Inactivo'}</span></td>
                           <td className="table-cell text-slate-500 text-xs">{ts(u.createdAt?.seconds)}</td>
                           <td className="table-cell">
-                            <button onClick={() => toggleUser(u)}
-                              className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
-                                u.active ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
-                              }`}>
-                              {u.active ? 'Desactivar' : 'Activar'}
-                            </button>
+                            <div className="flex gap-1.5 flex-wrap">
+                              <button onClick={() => openEditUser(u)} className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
+                                Editar
+                              </button>
+                              <button onClick={() => toggleUser(u)}
+                                className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
+                                  u.active ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
+                                }`}>
+                                {u.active ? 'Desactivar' : 'Activar'}
+                              </button>
+                              <button onClick={() => deleteUserPermanent(u)} className="text-xs px-2.5 py-1 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all">
+                                Eliminar
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       )
@@ -1010,6 +1227,86 @@ export default function SuperAdmin() {
 
         </>)}
       </div>
+
+
+
+      {/* ── Modal cambiar vencimiento Pro ── */}
+      {planModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0c1424] border border-white/10 rounded-2xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-bold text-slate-100">Cambiar fecha Pro</div>
+                <div className="text-xs text-slate-500 mt-0.5">{planModal.name}</div>
+              </div>
+              <button onClick={() => setPlanModal(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <div className="alert-info text-xs">
+              Al guardar, el negocio quedará en Plan Pro hasta la fecha seleccionada. También puedes usar los botones rápidos para sumar meses.
+            </div>
+            <div>
+              <label className="label">Fecha de vencimiento</label>
+              <input className="input" type="date" value={planExpiryInput} onChange={e => setPlanExpiryInput(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button className="btn-secondary text-xs" onClick={() => setPlanExpiryInput(addMonthsDateInput(1))}>+1 mes</button>
+              <button className="btn-secondary text-xs" onClick={() => setPlanExpiryInput(addMonthsDateInput(2))}>+2 meses</button>
+              <button className="btn-secondary text-xs" onClick={() => setPlanExpiryInput(addMonthsDateInput(3))}>+3 meses</button>
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <button className="btn-secondary" onClick={() => setPlanModal(null)}>Cancelar</button>
+              <button className="btn-primary" disabled={savingPlanExpiry || !planExpiryInput} onClick={savePlanExpiry}>
+                {savingPlanExpiry ? 'Guardando...' : 'Guardar fecha'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal editar usuario ── */}
+      {editingUser && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0c1424] border border-white/10 rounded-2xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="font-bold text-slate-100">Editar usuario</div>
+              <button onClick={() => setEditingUser(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="label">Nombre</label>
+                <input className="input" value={userForm.displayName} onChange={e => setUserForm(f => ({ ...f, displayName: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Correo</label>
+                <input className="input" type="email" value={userForm.email} onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Nueva contraseña</label>
+                <input className="input" type="password" placeholder="Dejar vacío para no cambiar" value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Rol</label>
+                <select className="select" value={userForm.role} onChange={e => setUserForm(f => ({ ...f, role: e.target.value }))}>
+                  <option>Cajero</option>
+                  <option>Encargado</option>
+                  <option>Administrador</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input type="checkbox" checked={userForm.active} onChange={e => setUserForm(f => ({ ...f, active: e.target.checked }))} />
+                Usuario activo
+              </label>
+            </div>
+            <div className="flex gap-2 justify-between pt-2">
+              <button className="btn-danger" onClick={() => deleteUserPermanent(editingUser)}>Eliminar</button>
+              <div className="flex gap-2">
+                <button className="btn-secondary" onClick={() => setEditingUser(null)}>Cancelar</button>
+                <button className="btn-primary" disabled={savingUser} onClick={saveUserChanges}>{savingUser ? 'Guardando...' : 'Guardar'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal mensaje privado ── */}
       {msgModal && (

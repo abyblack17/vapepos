@@ -1,106 +1,157 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profileExists() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isActive() { return profileExists() && profile().active == true; }
+    function isSuperAdmin() { return isActive() && profile().role == 'superadmin'; }
+    function belongsTo(businessId) { return isActive() && profile().businessId == businessId; }
+    function isAdmin(businessId) { return belongsTo(businessId) && profile().role == 'Administrador'; }
+    function isManager(businessId) { return belongsTo(businessId) && profile().role in ['Administrador', 'Encargado']; }
+    function validBusinessPayload(businessId) { return request.resource.data.businessId == businessId; }
 
-    // ── Helpers ──────────────────────────────────────────────
-    function isAuth() {
-      return request.auth != null;
-    }
-
-    function isSuperAdmin() {
-      return isAuth()
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin';
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function myBusinessId() {
-      return myProfile().businessId;
-    }
-
-    function myRole() {
-      return myProfile().role;
-    }
-
-    function belongsTo(businessId) {
-      return isAuth()
-          && myBusinessId() == businessId
-          && myProfile().active == true;
-    }
-
-    function isAdmin(businessId) {
-      return belongsTo(businessId) && myRole() == 'Administrador';
-    }
-
-    function isManagerOrAbove(businessId) {
-      return belongsTo(businessId)
-          && myRole() in ['Administrador', 'Encargado'];
-    }
-
-    // ── /users/{uid} ─────────────────────────────────────────
     match /users/{uid} {
-      allow read:   if (isAuth() && request.auth.uid == uid) || isSuperAdmin();
-      allow create: if isAuth() && request.auth.uid == uid;
-      allow update: if (isAuth() && request.auth.uid == uid
-                    && !request.resource.data.diff(resource.data)
-                        .affectedKeys().hasAny(['businessId','role']))
-                    || isSuperAdmin();
-      allow delete: if false;
+      allow read: if (signedIn() && request.auth.uid == uid) || isSuperAdmin();
+      allow create, delete: if false;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'theme', 'updatedAt']);
     }
 
-    // ── /businesses/{businessId}/** ───────────────────────────
-    // Regla principal: cualquier empleado activo del negocio
-    // puede leer y escribir en su propia rama
     match /businesses/{businessId} {
-      allow read:   if belongsTo(businessId) || isSuperAdmin();
-      allow create: if false; // Solo via Cloud Function
-      allow update: if isAdmin(businessId) || isSuperAdmin();
-      allow delete: if false;
+      allow read: if belongsTo(businessId) || isSuperAdmin();
+      allow create: if false;
+      allow update: if isSuperAdmin() || (isAdmin(businessId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'address', 'taxRate', 'logoUrl', 'updatedAt']));
+      allow delete: if isSuperAdmin();
 
-      // Todas las subcolecciones del negocio
-      // Regla permisiva: empleado activo puede leer/escribir todo
-      // Las restricciones finas (quien puede borrar) se manejan en el cliente
-      match /{collection}/{docId} {
-        allow read:   if belongsTo(businessId) || isSuperAdmin();
-        allow write:  if belongsTo(businessId) || isSuperAdmin();
+      match /users/{uid} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow write: if false;
       }
-
-      // Subsubcolecciones (settings/config, etc.)
-      match /{collection}/{docId}/{subcol}/{subdocId} {
-        allow read:   if belongsTo(businessId);
-        allow write:  if belongsTo(businessId);
+      match /settings/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create, update: if isAdmin(businessId) || isSuperAdmin();
+        allow delete: if false;
       }
+      match /products/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (isManager(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update: if isManager(businessId) || isSuperAdmin()
+          || (belongsTo(businessId) && request.resource.data.businessId == resource.data.businessId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']));
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /liquids/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (isManager(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update: if isSuperAdmin() || (isManager(businessId)
+          && request.resource.data.businessId == resource.data.businessId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'sku', 'brand', 'flavor', 'category', 'sizeML', 'costPerBottle',
+            'pricePerBottle', 'taxIncluded', 'pointsR50', 'pointsR100', 'pointsR150',
+            'activeCapacity', 'nicotinaFreebase', 'nicotinaSales', 'imageUrl', 'color',
+            'active', 'closedBottles', 'updatedAt'
+          ]));
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /sales/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if false;
+        allow update: if isManager(businessId) || isSuperAdmin();
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /liquid_sessions/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow write: if false;
+      }
+      match /liquid_events/{docId} {
+        allow read: if isManager(businessId) || isSuperAdmin();
+        allow write: if false;
+      }
+      match /refill_history/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow write: if false;
+      }
+      match /customers/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (belongsTo(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update: if belongsTo(businessId) || isSuperAdmin();
+        allow delete: if isManager(businessId) || isSuperAdmin();
+      }
+      match /suppliers/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create, update: if isManager(businessId) || isSuperAdmin();
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /purchases/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (isManager(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update, delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /cash_sessions/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if belongsTo(businessId) && validBusinessPayload(businessId)
+          && request.resource.data.userId == request.auth.uid;
+        allow update: if isManager(businessId) || isSuperAdmin()
+          || (belongsTo(businessId) && resource.data.userId == request.auth.uid);
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /inventory_movements/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (belongsTo(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update, delete: if false;
+      }
+      match /fiscalConfig/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create, update: if isAdmin(businessId) || isSuperAdmin();
+        allow delete: if false;
+      }
+      match /ncfSequences/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create, delete: if isAdmin(businessId) || isSuperAdmin();
+        allow update: if isAdmin(businessId) || isSuperAdmin()
+          || (belongsTo(businessId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextNumber', 'updatedAt'])
+            && request.resource.data.nextNumber == resource.data.nextNumber + 1
+            && resource.data.active == true && resource.data.nextNumber <= resource.data.endNumber);
+      }
+      match /fiscalInvoices/{docId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create: if (belongsTo(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();
+        allow update, delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /audit_logs/{docId} {
+        allow read: if isManager(businessId) || isSuperAdmin();
+        allow create: if belongsTo(businessId) && validBusinessPayload(businessId)
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.role == profile().role
+          && request.resource.data.keys().hasAll(['action', 'module', 'userId', 'role', 'businessId', 'createdAt']);
+        allow update, delete: if false;
+      }
+      match /upgrade_requests/{docId} {
+        allow read: if isAdmin(businessId) || isSuperAdmin();
+        allow create: if isAdmin(businessId) && validBusinessPayload(businessId);
+        allow update, delete: if isSuperAdmin();
+      }
+      match /suggestions/{docId} {
+        allow read, create, update: if belongsTo(businessId) || isSuperAdmin();
+        allow delete: if isAdmin(businessId) || isSuperAdmin();
+      }
+      match /{document=**} { allow read, write: if false; }
     }
 
-    // ── /providers_directory — Directorio global de proveedores ─
-    // Cualquier usuario autenticado puede leer
-    // Solo el admin del negocio puede crear/editar/eliminar su propio perfil
     match /providers_directory/{docId} {
-      allow read:   if isAuth();
-      allow create: if isAuth()
-                    && request.resource.data.businessId == myBusinessId()
-                    && myRole() == 'Administrador';
-      allow update: if (isAuth()
-                    && resource.data.businessId == myBusinessId()
-                    && myRole() == 'Administrador')
-                    || isSuperAdmin();
-      allow delete: if (isAuth()
-                    && resource.data.businessId == myBusinessId()
-                    && myRole() == 'Administrador')
-                    || isSuperAdmin();
+      allow read: if isActive();
+      allow create: if isAdmin(request.resource.data.businessId)
+        && request.resource.data.businessId == profile().businessId;
+      allow update, delete: if isSuperAdmin()
+        || (isAdmin(resource.data.businessId) && resource.data.businessId == profile().businessId);
     }
-
-    // Anuncios del sistema — superadmin escribe, todos leen
     match /system_announcements/{docId} {
-      allow read:  if isAuth();
+      allow read: if isActive();
       allow write: if isSuperAdmin();
     }
-
-    // Bloquear todo lo demas
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    match /{document=**} { allow read, write: if false; }
   }
 }

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../contexts/AppContext'
-import { buildRefillCartItem, canRefill, getNicotinaLabel, getPointsForType } from '../../services/liquidService'
+import { buildRefillCartItem, canRefill, getNicotinaLabel, getPointsForType, getRefillButtons } from '../../services/liquidService'
 import BottleProgress from '../ui/BottleProgress'
 import toast from 'react-hot-toast'
 import { fmt } from '../../utils/helpers'
 
 export default function RefillButtons({ onAdd }) {
-  const { state, dispatch } = useApp()
+  const { state } = useApp()
 
   const availableLiquids = state.liquids.filter(l =>
     l.active && (l.hasActive || l.closedBottles > 0)
@@ -36,7 +36,7 @@ export default function RefillButtons({ onAdd }) {
 
   const canAddRefill = (price) => {
     if (!liquid?.hasActive) return false
-    const pts = getPointsForType(liquid, price)
+    const pts = getPointsForType(liquid, price, state.settings)
     return saldoLeft >= pts
   }
 
@@ -45,13 +45,13 @@ export default function RefillButtons({ onAdd }) {
       toast.error('No hay botella activa para este liquido')
       return
     }
-    const pts = getPointsForType(liquid, price)
+    const pts = getPointsForType(liquid, price, state.settings)
     if (saldoLeft < pts) {
       toast.error(`Saldo insuficiente. Disponible: ${saldoLeft} pts, necesitas ${pts} pts`)
       return
     }
     try {
-      const item = buildRefillCartItem(liquid, price)
+      const item = buildRefillCartItem(liquid, price, state.settings)
       // Double check with current saldo in state
       if (cartPoints + item.points > realSaldo) {
         toast.error(`Saldo insuficiente. Solo quedan ${saldoLeft} pts`)
@@ -79,6 +79,7 @@ export default function RefillButtons({ onAdd }) {
       price:      liquid.pricePerBottle || Math.round(liquid.costPerBottle * 1.5),
       cost:       liquid.costPerBottle,
       qty:        1,
+      taxIncluded: liquid.taxIncluded === true,
     }
     onAdd(item)
     toast.success(`Frasco de "${liquid.name}" agregado al carrito`)
@@ -101,6 +102,7 @@ export default function RefillButtons({ onAdd }) {
       price:      halfPrice,
       cost:       Math.round(liquid.costPerBottle / 2),
       qty:        1,
+      taxIncluded: liquid.taxIncluded === true,
       isHalf:     true,
     }
     onAdd(item)
@@ -119,11 +121,19 @@ export default function RefillButtons({ onAdd }) {
     )
   }
 
-  const REFILL_OPTIONS = [
-    { price: 50,  label: 'RD$50',  pts: liquid ? getPointsForType(liquid, 50)  : 0, border: 'border-[#00e5a0]/30', bg: 'bg-[#00e5a0]/10', text: 'text-[#00e5a0]' },
-    { price: 100, label: 'RD$100', pts: liquid ? getPointsForType(liquid, 100) : 0, border: 'border-[#00c4e8]/30', bg: 'bg-[#00c4e8]/10', text: 'text-[#00c4e8]' },
-    { price: 150, label: 'RD$150', pts: liquid ? getPointsForType(liquid, 150) : 0, border: 'border-[#8b5cf6]/30', bg: 'bg-[#8b5cf6]/10', text: 'text-[#a78bfa]' },
+  const styleCycle = [
+    { border: 'border-[#00e5a0]/30', bg: 'bg-[#00e5a0]/10', text: 'text-[#00e5a0]' },
+    { border: 'border-[#00c4e8]/30', bg: 'bg-[#00c4e8]/10', text: 'text-[#00c4e8]' },
+    { border: 'border-[#8b5cf6]/30', bg: 'bg-[#8b5cf6]/10', text: 'text-[#a78bfa]' },
+    { border: 'border-[#f59e0b]/30', bg: 'bg-[#f59e0b]/10', text: 'text-[#fbbf24]' },
+    { border: 'border-red-400/30', bg: 'bg-red-400/10', text: 'text-red-300' },
   ]
+  const REFILL_OPTIONS = getRefillButtons(state.settings).map((btn, index) => ({
+    ...btn,
+    label: `RD$${btn.price}`,
+    pts: liquid ? getPointsForType(liquid, btn.price, state.settings) : btn.points,
+    ...styleCycle[index % styleCycle.length],
+  }))
 
   return (
     <div className="space-y-4">
@@ -193,7 +203,7 @@ export default function RefillButtons({ onAdd }) {
       {liquid?.hasActive && (
         <>
           <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Recargas por precio</div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {REFILL_OPTIONS.map(opt => {
               const enabled = canAddRefill(opt.price)
               return (

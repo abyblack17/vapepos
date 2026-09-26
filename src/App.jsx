@@ -6,8 +6,11 @@ import { NavigationProvider, useNavigation } from './contexts/NavigationContext'
 import { AppProvider } from './contexts/AppContext'
 import Sidebar from './components/layout/Sidebar'
 import TopBar from './components/layout/TopBar'
+import { useApp } from './contexts/AppContext'
+
 import Dashboard from './pages/Dashboard'
 import POS from './pages/POS'
+import Cart from './pages/Cart'
 import Refills from './pages/Refills'
 import Inventory from './pages/Inventory'
 import Purchases from './pages/Purchases'
@@ -18,15 +21,26 @@ import SalesHistory from './pages/SalesHistory'
 import Cash from './pages/Cash'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
+import Fiscal from './pages/Fiscal'
 import Suggestions from './pages/Suggestions'
 import Insights from './pages/Insights'
 import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
 import SuperAdmin from './pages/SuperAdmin'
 
+const MOBILE_NAV_ITEMS = [
+  { id: 'dashboard', icon: '◈', label: 'Inicio' },
+  { id: 'pos',       icon: '⊞', label: 'Venta' },
+  { id: 'cart',      icon: '🛒', label: 'Carrito' },
+  { id: 'history',   icon: '🧾', label: 'Recibos' },
+  { id: 'reports',   icon: '◫', label: 'Reportes' },
+]
+
+
 const PAGE_COMPONENTS = {
   dashboard:   Dashboard,
   pos:         POS,
+  cart:        Cart,
   refills:     Refills,
   inventory:   Inventory,
   purchases:   Purchases,
@@ -37,12 +51,14 @@ const PAGE_COMPONENTS = {
   cash:        Cash,
   users:       Users,
   settings:    Settings,
+  fiscal:      Fiscal,
   suggestions: Suggestions,
   insights:    Insights,
 }
 
 function AppShell() {
   const { currentPage, navigate } = useNavigation()
+  const { state } = useApp()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const PageComponent = PAGE_COMPONENTS[currentPage] || Dashboard
   const handleNavigate = (page) => {
@@ -51,7 +67,7 @@ function AppShell() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#080d18]">
+    <div className="app-shell flex h-screen overflow-hidden bg-[#080d18]" style={{height: '100dvh'}}>
 
       {/* Overlay oscuro en movil cuando sidebar esta abierto */}
       {sidebarOpen && (
@@ -71,14 +87,35 @@ function AppShell() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
         <TopBar
           currentPage={currentPage}
           onMenuClick={() => setSidebarOpen(!sidebarOpen)}
         />
-        <main className={`flex-1 overflow-y-auto ${currentPage === 'pos' ? 'p-3 md:p-4' : 'p-3 md:p-5'}`}>
+        <main className={`app-main flex-1 overflow-y-auto overscroll-contain ${currentPage === 'pos' ? 'p-3 md:p-4' : 'p-3 md:p-5'}`}
+          style={{paddingBottom: 'max(84px, env(safe-area-inset-bottom))'}}>
           <PageComponent />
         </main>
+
+
+        <nav className="mobile-bottom-nav md:hidden" aria-label="Navegacion principal">
+          {MOBILE_NAV_ITEMS.map(item => {
+            const active = currentPage === item.id
+            const cartCount = item.id === 'cart' ? (state.cart?.reduce((a, i) => a + (i.qty || 1), 0) || 0) : 0
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleNavigate(item.id)}
+                className={active ? 'mobile-bottom-nav-item active' : 'mobile-bottom-nav-item'}
+              >
+                <span className="text-base leading-none">{item.icon}</span>
+                <span>{item.label}</span>
+                {cartCount > 0 && <span className="mobile-cart-badge">{cartCount}</span>}
+              </button>
+            )
+          })}
+        </nav>
       </div>
     </div>
   )
