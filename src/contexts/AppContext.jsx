@@ -517,7 +517,7 @@ export function AppProvider({ children }) {
           bizGetAll(businessId, 'users',          []),
           bizGetAll(businessId, 'purchases',      [orderBy('createdAt', 'desc')]),
           bizGetAll(businessId, 'cash_sessions',  [orderBy('createdAt', 'desc')]),
-          getBusinessSettings(businessId),
+          getBusinessSettings(businessId, branchesEnabled ? selectedBranchId : null),
           bizGetAll(businessId, 'fiscalConfig', []),
           bizGetAll(businessId, 'ncfSequences', []),
           bizGetAll(businessId, 'fiscalInvoices', [orderBy('createdAt', 'desc')]),
@@ -548,7 +548,7 @@ export function AppProvider({ children }) {
             ncfSequences, fiscalInvoices: branchFiscalInvoices,
             settings: settings || stateRef.current.settings,
             saleCounter: maxCounter,
-            cashSession:  openSession || stateRef.current.cashSession,
+            cashSession:  openSession || { open: false, sales: 0, expenses: 0, openAmount: 0, expenseList: [] },
             cashSessions: branchCashSessions,
           },
         })

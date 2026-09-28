@@ -25,6 +25,7 @@ const PERMISSION_GROUPS = [
       { key: 'suppliers',   label: 'Proveedores' },
       { key: 'reports',     label: 'Reportes' },
       { key: 'cash',        label: 'Caja' },
+      { key: 'branches',    label: 'Administrar sucursales' },
       { key: 'suggestions', label: 'Sugerencias' },
     ]
   },

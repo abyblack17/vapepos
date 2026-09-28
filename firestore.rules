@@ -38,6 +38,14 @@ service cloud.firestore {
         allow read: if belongsTo(businessId) || isSuperAdmin();
         allow write: if false;
       }
+      match /branch_settings/{branchId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow write: if false;
+      }
+      match /branch_transfers/{transferId} {
+        allow read: if isManager(businessId) || isSuperAdmin();
+        allow write: if false;
+      }
       match /products/{docId} {
         allow read: if belongsTo(businessId) || isSuperAdmin();
         allow create: if (isManager(businessId) && validBusinessPayload(businessId)) || isSuperAdmin();

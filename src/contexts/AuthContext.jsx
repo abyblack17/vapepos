@@ -251,6 +251,7 @@ export function AuthProvider({ children }) {
     businessId:  userProfile.businessId,
     active:      userProfile.active,
     permissions: userProfile.permissions || null,
+    branchIds:   Array.isArray(userProfile.branchIds) ? userProfile.branchIds : [],
     theme:       userProfile.theme || 'dark',
   } : null
 

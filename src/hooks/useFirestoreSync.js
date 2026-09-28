@@ -343,7 +343,7 @@ export function useFirestoreSync(businessId, branchId = null) {
         // SETTINGS
         // ════════════════════════════════════════════════════
         case 'UPDATE_SETTINGS':
-          await saveBusinessSettings(businessId, newState.settings)
+          await saveBusinessSettings(businessId, newState.settings, branchId)
           break
 
         default:

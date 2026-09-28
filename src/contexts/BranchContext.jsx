@@ -23,10 +23,16 @@ export function BranchProvider({ children }) {
 
   const testOwner = currentUser?.email?.toLowerCase() === TEST_OWNER_EMAIL
   const branchesEnabled = testOwner || storedBranches.length > 0
-  const branches = useMemo(() => {
+  const canManageBranches = currentUser?.role === 'Administrador' || (currentUser?.role === 'Encargado' && currentUser?.permissions?.branches === true)
+  const allBranches = useMemo(() => {
     const hasMain = storedBranches.some(branch => branch.id === 'main' || branch.isMain)
     return hasMain ? storedBranches : [mainBranch, ...storedBranches]
   }, [storedBranches])
+  const branches = useMemo(() => {
+    if (canManageBranches) return allBranches
+    const assigned = Array.isArray(currentUser?.branchIds) ? currentUser.branchIds : []
+    return allBranches.filter(branch => assigned.includes(branch.id))
+  }, [allBranches, canManageBranches, currentUser?.branchIds])
 
   useEffect(() => {
     if (!businessId) return
@@ -62,7 +68,7 @@ export function BranchProvider({ children }) {
   }
 
   const createBranch = async ({ name, address = '', phone = '' }) => {
-    if (!businessId || currentUser?.role !== 'Administrador') throw new Error('Solo el administrador puede crear sucursales.')
+    if (!businessId || !canManageBranches) throw new Error('No tienes permiso para crear sucursales.')
     const additional = storedBranches.filter(branch => !branch.isMain).length
     if (additional >= MAX_ADDITIONAL_BRANCHES) throw new Error('El negocio ya alcanzó el máximo de 5 sucursales adicionales.')
     const cleanName = String(name || '').trim()
@@ -76,6 +82,7 @@ export function BranchProvider({ children }) {
   }
 
   const setBranchActive = async (branchId, active) => {
+    if (!canManageBranches) throw new Error('No tienes permiso para administrar sucursales.')
     const branch = storedBranches.find(item => item.id === branchId)
     if (!branch || branch.isMain) throw new Error('La sucursal principal no puede suspenderse.')
     const fn = httpsCallable(getFunctions(), 'manageTestBranch')
@@ -84,12 +91,26 @@ export function BranchProvider({ children }) {
     if (!active && selectedBranchId === branchId) selectBranch('main')
   }
 
-  const activeAdditionalBranches = branches.filter(branch => !branch.isMain && branch.active !== false)
+  const assignUser = async (branchId, userId, assigned) => {
+    if (!canManageBranches) throw new Error('No tienes permiso para asignar usuarios.')
+    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const result = await fn({ action: 'assignUser', branchId, userId, assigned })
+    return result.data
+  }
+
+  const transferStock = async ({ itemType, itemId, sourceBranchId, targetBranchId, quantity }) => {
+    if (!canManageBranches) throw new Error('No tienes permiso para transferir inventario.')
+    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const result = await fn({ action: 'transferStock', itemType, itemId, sourceBranchId, targetBranchId, quantity })
+    return result.data
+  }
+
+  const activeAdditionalBranches = allBranches.filter(branch => !branch.isMain && branch.active !== false)
   const selectedBranch = branches.find(branch => branch.id === selectedBranchId) || mainBranch
 
   return <BranchContext.Provider value={{
-    branchesEnabled, loadingBranches, branches, selectedBranch, selectedBranchId,
-    selectBranch, createBranch, setBranchActive,
+    branchesEnabled, loadingBranches, branches, allBranches, selectedBranch, selectedBranchId, canManageBranches,
+    selectBranch, createBranch, setBranchActive, assignUser, transferStock,
     activeAdditionalCount: activeAdditionalBranches.length,
     monthlyBranchCost: activeAdditionalBranches.length * BRANCH_MONTHLY_PRICE,
   }}>{children}</BranchContext.Provider>

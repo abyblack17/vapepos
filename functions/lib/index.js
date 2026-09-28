@@ -839,7 +839,7 @@ exports.updateUserPermissions = (0, https_1.onCall)({ region: 'us-central1', enf
     const booleanKeys = [
         'dashboard', 'pos', 'refills', 'inventory', 'purchases', 'customers',
         'suppliers', 'reports', 'cash', 'users', 'settings', 'suggestions',
-        'insights', 'viewProfit', 'deleteInvoice', 'editInvoice',
+        'insights', 'branches', 'viewProfit', 'deleteInvoice', 'editInvoice',
         'viewRendimiento', 'deleteProduct', 'manageUsers',
     ];
     const clean = {};
@@ -1024,25 +1024,30 @@ exports.activateTrial = (0, https_1.onCall)({ region: 'us-central1', enforceAppC
 // Sucursales beta: exclusivamente cuenta Tests
 // ══════════════════════════════════════════════════════════════
 exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3;
     if (!request.auth)
         throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
-    const email = String(request.auth.token.email || '').trim().toLowerCase();
-    if (email !== 'test01@gmail.com')
-        throw new https_1.HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para la cuenta Tests.');
     const profileSnap = await db.doc(`users/${request.auth.uid}`).get();
     const profile = profileSnap.data();
     const businessId = String((profile === null || profile === void 0 ? void 0 : profile.businessId) || '');
-    if (!profileSnap.exists || (profile === null || profile === void 0 ? void 0 : profile.active) !== true || (profile === null || profile === void 0 ? void 0 : profile.role) !== 'Administrador' || !businessId) {
-        throw new https_1.HttpsError('permission-denied', 'Solo el administrador activo de Tests puede administrar sucursales.');
+    if (!profileSnap.exists || (profile === null || profile === void 0 ? void 0 : profile.active) !== true || !businessId) {
+        throw new https_1.HttpsError('permission-denied', 'Cuenta activa requerida.');
     }
-    const action = String(((_a = request.data) === null || _a === void 0 ? void 0 : _a.action) || '');
+    const businessUsers = await db.collection(`businesses/${businessId}/users`).get();
+    const isTestBusiness = businessUsers.docs.some(item => { var _a; return String(((_a = item.data()) === null || _a === void 0 ? void 0 : _a.email) || '').trim().toLowerCase() === 'test01@gmail.com'; });
+    if (!isTestBusiness)
+        throw new https_1.HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para el negocio Tests.');
+    const canManage = (profile === null || profile === void 0 ? void 0 : profile.role) === 'Administrador' || ((profile === null || profile === void 0 ? void 0 : profile.role) === 'Encargado' && ((_a = profile === null || profile === void 0 ? void 0 : profile.permissions) === null || _a === void 0 ? void 0 : _a.branches) === true);
+    if (!canManage)
+        throw new https_1.HttpsError('permission-denied', 'No tienes permiso para administrar sucursales.');
+    const email = String(request.auth.token.email || '').trim().toLowerCase();
+    const action = String(((_b = request.data) === null || _b === void 0 ? void 0 : _b.action) || '');
     const branchesRef = db.collection(`businesses/${businessId}/branches`);
     const now = firestore_2.FieldValue.serverTimestamp();
     if (action === 'create') {
-        const name = String(((_b = request.data) === null || _b === void 0 ? void 0 : _b.name) || '').trim().slice(0, 80);
-        const address = String(((_c = request.data) === null || _c === void 0 ? void 0 : _c.address) || '').trim().slice(0, 180);
-        const phone = String(((_d = request.data) === null || _d === void 0 ? void 0 : _d.phone) || '').trim().slice(0, 30);
+        const name = String(((_c = request.data) === null || _c === void 0 ? void 0 : _c.name) || '').trim().slice(0, 80);
+        const address = String(((_d = request.data) === null || _d === void 0 ? void 0 : _d.address) || '').trim().slice(0, 180);
+        const phone = String(((_e = request.data) === null || _e === void 0 ? void 0 : _e.phone) || '').trim().slice(0, 30);
         if (!name)
             throw new https_1.HttpsError('invalid-argument', 'El nombre de la sucursal es requerido.');
         const existing = await branchesRef.get();
@@ -1065,21 +1070,136 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
         return { success: true, branch: { id: branchRef.id, businessId, name, address, phone, code: branch.code, isMain: false, active: true, monthlyPrice: 300, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } };
     }
     if (action === 'setActive') {
-        const branchId = String(((_e = request.data) === null || _e === void 0 ? void 0 : _e.branchId) || '');
-        const active = ((_f = request.data) === null || _f === void 0 ? void 0 : _f.active) === true;
+        const branchId = String(((_f = request.data) === null || _f === void 0 ? void 0 : _f.branchId) || '');
+        const active = ((_g = request.data) === null || _g === void 0 ? void 0 : _g.active) === true;
         if (!branchId)
             throw new https_1.HttpsError('invalid-argument', 'Sucursal requerida.');
         const branchRef = branchesRef.doc(branchId);
         const branchSnap = await branchRef.get();
-        if (!branchSnap.exists || ((_g = branchSnap.data()) === null || _g === void 0 ? void 0 : _g.isMain) === true)
+        if (!branchSnap.exists || ((_h = branchSnap.data()) === null || _h === void 0 ? void 0 : _h.isMain) === true)
             throw new https_1.HttpsError('not-found', 'Sucursal no encontrada.');
         await branchRef.update({ active, updatedAt: now });
         await db.collection(`businesses/${businessId}/audit_logs`).add({
             action: active ? 'ACTIVATE_BRANCH' : 'SUSPEND_BRANCH', module: 'branches',
             userId: request.auth.uid, userName: email, role: 'Administrador', targetId: branchId,
-            targetName: ((_h = branchSnap.data()) === null || _h === void 0 ? void 0 : _h.name) || branchId, businessId, after: { active }, createdAt: now,
+            targetName: ((_j = branchSnap.data()) === null || _j === void 0 ? void 0 : _j.name) || branchId, businessId, after: { active }, createdAt: now,
         });
         return { success: true, branchId, active };
+    }
+    if (action === 'assignUser') {
+        const branchId = String(((_k = request.data) === null || _k === void 0 ? void 0 : _k.branchId) || '');
+        const userId = String(((_l = request.data) === null || _l === void 0 ? void 0 : _l.userId) || '');
+        const assigned = ((_m = request.data) === null || _m === void 0 ? void 0 : _m.assigned) === true;
+        if (!branchId || !userId)
+            throw new https_1.HttpsError('invalid-argument', 'Sucursal y usuario son requeridos.');
+        const targetGlobalRef = db.doc(`users/${userId}`);
+        const targetBusinessRef = db.doc(`businesses/${businessId}/users/${userId}`);
+        const [globalSnap, businessSnap] = await Promise.all([targetGlobalRef.get(), targetBusinessRef.get()]);
+        if (!globalSnap.exists || ((_o = globalSnap.data()) === null || _o === void 0 ? void 0 : _o.businessId) !== businessId || !businessSnap.exists)
+            throw new https_1.HttpsError('not-found', 'Usuario no encontrado en este negocio.');
+        if (((_p = globalSnap.data()) === null || _p === void 0 ? void 0 : _p.role) === 'Administrador')
+            throw new https_1.HttpsError('failed-precondition', 'El Administrador general tiene acceso a todas las sucursales y no ocupa cupo.');
+        const currentIds = Array.isArray((_q = globalSnap.data()) === null || _q === void 0 ? void 0 : _q.branchIds) ? (_r = globalSnap.data()) === null || _r === void 0 ? void 0 : _r.branchIds.map(String) : [];
+        if (assigned) {
+            const assignedCount = businessUsers.docs.filter(item => { var _a, _b, _c; return item.id !== userId && ((_a = item.data()) === null || _a === void 0 ? void 0 : _a.role) !== 'Administrador' && Array.isArray((_b = item.data()) === null || _b === void 0 ? void 0 : _b.branchIds) && ((_c = item.data()) === null || _c === void 0 ? void 0 : _c.branchIds.includes(branchId)); }).length;
+            if (assignedCount >= 2)
+                throw new https_1.HttpsError('failed-precondition', 'Esta sucursal ya tiene el máximo de 2 usuarios asignados.');
+        }
+        const nextIds = assigned ? Array.from(new Set([...currentIds, branchId])) : currentIds.filter((id) => id !== branchId);
+        const batch = db.batch();
+        batch.update(targetGlobalRef, { branchIds: nextIds, updatedAt: now });
+        batch.update(targetBusinessRef, { branchIds: nextIds, updatedAt: now });
+        batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+            action: assigned ? 'ASSIGN_BRANCH_USER' : 'UNASSIGN_BRANCH_USER', module: 'branches',
+            userId: request.auth.uid, userName: email, role: profile === null || profile === void 0 ? void 0 : profile.role, targetId: userId,
+            targetName: ((_s = globalSnap.data()) === null || _s === void 0 ? void 0 : _s.displayName) || ((_t = globalSnap.data()) === null || _t === void 0 ? void 0 : _t.email) || userId,
+            businessId, after: { branchId, branchIds: nextIds }, createdAt: now,
+        });
+        await batch.commit();
+        return { success: true, userId, branchIds: nextIds };
+    }
+    if (action === 'saveSettings') {
+        const branchId = String(((_u = request.data) === null || _u === void 0 ? void 0 : _u.branchId) || '');
+        const incoming = (_v = request.data) === null || _v === void 0 ? void 0 : _v.settings;
+        if (!branchId || branchId === 'main' || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+            throw new https_1.HttpsError('invalid-argument', 'Configuración de sucursal inválida.');
+        }
+        const branchSnap = await branchesRef.doc(branchId).get();
+        if (!branchSnap.exists || ((_w = branchSnap.data()) === null || _w === void 0 ? void 0 : _w.active) === false)
+            throw new https_1.HttpsError('failed-precondition', 'La sucursal no está activa.');
+        const blockedKeys = new Set(['businessId', 'branchId', 'createdAt', 'updatedAt', 'plan', 'active', 'ownerId']);
+        const cleanSettings = {};
+        for (const [key, value] of Object.entries(incoming)) {
+            if (!blockedKeys.has(key) && value !== undefined)
+                cleanSettings[key] = value;
+        }
+        await db.doc(`businesses/${businessId}/branch_settings/${branchId}`).set(Object.assign(Object.assign({}, cleanSettings), { businessId, branchId, updatedAt: now, updatedBy: request.auth.uid }), { merge: true });
+        return { success: true, branchId };
+    }
+    if (action === 'transferStock') {
+        const itemType = String(((_x = request.data) === null || _x === void 0 ? void 0 : _x.itemType) || '');
+        const itemId = String(((_y = request.data) === null || _y === void 0 ? void 0 : _y.itemId) || '');
+        const sourceBranchId = String(((_z = request.data) === null || _z === void 0 ? void 0 : _z.sourceBranchId) || '');
+        const targetBranchId = String(((_0 = request.data) === null || _0 === void 0 ? void 0 : _0.targetBranchId) || '');
+        const quantity = Math.floor(Number(((_1 = request.data) === null || _1 === void 0 ? void 0 : _1.quantity) || 0));
+        if (!['product', 'liquid'].includes(itemType) || !itemId || !sourceBranchId || !targetBranchId || sourceBranchId === targetBranchId || quantity <= 0) {
+            throw new https_1.HttpsError('invalid-argument', 'Datos de transferencia inválidos.');
+        }
+        if (targetBranchId !== 'main') {
+            const targetBranch = await branchesRef.doc(targetBranchId).get();
+            if (!targetBranch.exists || ((_2 = targetBranch.data()) === null || _2 === void 0 ? void 0 : _2.active) === false)
+                throw new https_1.HttpsError('failed-precondition', 'La sucursal destino no está activa.');
+        }
+        const collectionName = itemType === 'product' ? 'products' : 'liquids';
+        const sourceRef = db.doc(`businesses/${businessId}/${collectionName}/${itemId}`);
+        const sourceSnap = await sourceRef.get();
+        if (!sourceSnap.exists)
+            throw new https_1.HttpsError('not-found', 'Artículo de origen no encontrado.');
+        const source = sourceSnap.data() || {};
+        const actualSourceBranch = String(source.branchId || 'main');
+        if (actualSourceBranch !== sourceBranchId)
+            throw new https_1.HttpsError('failed-precondition', 'El artículo no pertenece a la sucursal de origen.');
+        const available = Number(itemType === 'product' ? source.stock : source.closedBottles) || 0;
+        if (quantity > available)
+            throw new https_1.HttpsError('failed-precondition', 'Cantidad insuficiente para transferir.');
+        const itemsSnap = await db.collection(`businesses/${businessId}/${collectionName}`).get();
+        const destinationMatch = itemsSnap.docs.find(item => {
+            var _a, _b, _c;
+            if (String(((_a = item.data()) === null || _a === void 0 ? void 0 : _a.branchId) || 'main') !== targetBranchId)
+                return false;
+            return source.sku ? ((_b = item.data()) === null || _b === void 0 ? void 0 : _b.sku) === source.sku : String(((_c = item.data()) === null || _c === void 0 ? void 0 : _c.name) || '').toLowerCase() === String(source.name || '').toLowerCase();
+        });
+        const destinationRef = (destinationMatch === null || destinationMatch === void 0 ? void 0 : destinationMatch.ref) || db.collection(`businesses/${businessId}/${collectionName}`).doc();
+        const stockField = itemType === 'product' ? 'stock' : 'closedBottles';
+        const batch = db.batch();
+        batch.update(sourceRef, { [stockField]: available - quantity, updatedAt: now });
+        if (destinationMatch) {
+            batch.update(destinationRef, { [stockField]: (Number((_3 = destinationMatch.data()) === null || _3 === void 0 ? void 0 : _3[stockField]) || 0) + quantity, updatedAt: now });
+        }
+        else {
+            const clone = Object.assign(Object.assign({}, source), { branchId: targetBranchId, [stockField]: quantity, createdAt: now, updatedAt: now });
+            if (itemType === 'liquid') {
+                clone.hasActive = false;
+                clone.activeSaldo = 0;
+                clone.openBottleCount = 0;
+                clone.activeSessionIds = [];
+            }
+            batch.set(destinationRef, clone);
+        }
+        const transferRef = db.collection(`businesses/${businessId}/branch_transfers`).doc();
+        batch.set(transferRef, {
+            businessId, itemType, itemId, itemName: source.name || '', quantity,
+            sourceBranchId, targetBranchId, destinationItemId: destinationRef.id,
+            userId: request.auth.uid, userName: email, createdAt: now,
+        });
+        batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+            action: 'TRANSFER_BRANCH_STOCK', module: 'branches', userId: request.auth.uid,
+            userName: email, role: profile === null || profile === void 0 ? void 0 : profile.role, targetId: transferRef.id,
+            targetName: source.name || itemId, businessId,
+            after: { itemType, quantity, sourceBranchId, targetBranchId }, createdAt: now,
+        });
+        await batch.commit();
+        return { success: true, transferId: transferRef.id, destinationItemId: destinationRef.id };
     }
     throw new https_1.HttpsError('invalid-argument', 'Acción de sucursal no válida.');
 });

@@ -101,7 +101,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-0.5">
         {NAV_ITEMS.map(item => {
-          if (item.id === 'branches' && (!branchesEnabled || role !== 'Administrador')) return null
+          if (item.id === 'branches' && (!branchesEnabled || !canDo(currentUser, 'branches'))) return null
           const permKey   = PAGE_PERMISSION[item.id] || item.id
           const isProItem = PRO_ITEMS.includes(item.id)
 

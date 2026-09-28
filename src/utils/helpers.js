@@ -54,7 +54,7 @@ export const ROLE_PERMISSIONS = {
     // Modulos
     dashboard: true, pos: true, refills: true, inventory: true,
     purchases: true, customers: true, suppliers: true, reports: true,
-    cash: true, users: true, settings: true, suggestions: true, insights: true,
+    cash: true, users: true, settings: true, suggestions: true, insights: true, branches: true,
     // Granulares
     viewProfit: true, deleteInvoice: true, editInvoice: true,
     viewRendimiento: true, deleteProduct: true, manageUsers: true,
@@ -63,7 +63,7 @@ export const ROLE_PERMISSIONS = {
   Encargado: {
     dashboard: true, pos: true, refills: true, inventory: true,
     purchases: true, customers: true, suppliers: false, reports: true,
-    cash: true, users: false, settings: false, suggestions: false, insights: true,
+    cash: true, users: false, settings: false, suggestions: false, insights: true, branches: false,
     viewProfit: false, deleteInvoice: false, editInvoice: false,
     viewRendimiento: false, deleteProduct: false, manageUsers: false,
     refillsTabs: 'active+hist',
@@ -71,7 +71,7 @@ export const ROLE_PERMISSIONS = {
   Cajero: {
     dashboard: true, pos: true, refills: true, inventory: false,
     purchases: false, customers: true, suppliers: false, reports: false,
-    cash: true, users: false, settings: false, suggestions: false, insights: false,
+    cash: true, users: false, settings: false, suggestions: false, insights: false, branches: false,
     viewProfit: false, deleteInvoice: false, editInvoice: false,
     viewRendimiento: false, deleteProduct: false, manageUsers: false,
     refillsTabs: 'active',

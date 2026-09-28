@@ -4,7 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext'
 import { AppProvider } from './contexts/AppContext'
-import { BranchProvider } from './contexts/BranchContext'
+import { BranchProvider, useBranches } from './contexts/BranchContext'
 import Sidebar from './components/layout/Sidebar'
 import TopBar from './components/layout/TopBar'
 import { useApp } from './contexts/AppContext'
@@ -63,10 +63,15 @@ function AppShell() {
   const { currentPage, navigate } = useNavigation()
   const { state } = useApp()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const { branchesEnabled, branches, loadingBranches } = useBranches()
   const PageComponent = PAGE_COMPONENTS[currentPage] || Dashboard
   const handleNavigate = (page) => {
     navigate(page)
     setSidebarOpen(false)
+  }
+
+  if (branchesEnabled && !loadingBranches && branches.length === 0) {
+    return <div className="min-h-screen bg-[#080d18] flex items-center justify-center p-5"><div className="card p-6 max-w-md text-center"><div className="text-4xl mb-3">📍</div><h2 className="font-display text-xl font-bold text-slate-100">Sin sucursal asignada</h2><p className="text-sm text-slate-400 mt-2">Un Administrador debe asignarte a una sucursal antes de que puedas usar VapePos.</p></div></div>
   }
 
   return (

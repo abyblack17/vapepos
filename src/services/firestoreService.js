@@ -27,6 +27,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../config/firebase'
 
 // ── Path builders ─────────────────────────────────────────────
@@ -158,20 +159,32 @@ export async function bizDelete(businessId, colName, docId) {
 
 // ── Settings ─────────────────────────────────────────────────
 
-export async function getBusinessSettings(businessId) {
+export async function getBusinessSettings(businessId, branchId = null) {
   try {
     const snap = await getDoc(bizSettingsDoc(businessId))
-    if (snap.exists()) return snap.data()
+    let base = snap.exists() ? snap.data() : null
     // Fallback: read from /businesses/{id} root doc
-    const biz = await getDoc(businessDoc(businessId))
-    return biz.exists() ? biz.data() : null
+    if (!base) {
+      const biz = await getDoc(businessDoc(businessId))
+      base = biz.exists() ? biz.data() : null
+    }
+    if (branchId && branchId !== 'main') {
+      const branchSnap = await getDoc(bizDoc(businessId, 'branch_settings', branchId))
+      if (branchSnap.exists()) return { ...base, ...branchSnap.data() }
+    }
+    return base
   } catch {
     return null
   }
 }
 
-export async function saveBusinessSettings(businessId, settings) {
+export async function saveBusinessSettings(businessId, settings, branchId = null) {
   try {
+    if (branchId && branchId !== 'main') {
+      const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+      await fn({ action: 'saveSettings', branchId, settings })
+      return true
+    }
     await setDoc(bizSettingsDoc(businessId), {
       ...settings,
       updatedAt: serverTimestamp(),

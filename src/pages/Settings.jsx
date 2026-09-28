@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useAuth } from '../contexts/AuthContext'
 import { uploadBusinessLogo } from '../services/storageService'
@@ -30,6 +30,10 @@ export default function Settings() {
   const [claimingAdmin, setClaimingAdmin] = useState(false)
   const [generatingDemo, setGeneratingDemo] = useState(false)
 
+  useEffect(() => {
+    setSettings({ ...state.settings })
+  }, [state.branchId, state.settings])
+
   const set       = (k, v) => setSettings(s => ({ ...s, [k]: v }))
   const canBackup = hasFeature('exportBackup')
   const refillButtons = Array.isArray(settings.refillButtons) && settings.refillButtons.length
@@ -53,7 +57,7 @@ export default function Settings() {
 
   const handleSave = (section) => {
     dispatch({ type: 'UPDATE_SETTINGS', payload: settings })
-    saveBusinessSettings(businessId, settings).catch(() => {})
+    saveBusinessSettings(businessId, settings, state.branchId).catch(() => {})
     toast.success(`Configuración de ${section} guardada`)
   }
 
@@ -61,7 +65,7 @@ export default function Settings() {
   const persistSettings = async (nextSettings, section) => {
     setSettings(nextSettings)
     dispatch({ type: 'UPDATE_SETTINGS', payload: nextSettings })
-    await saveBusinessSettings(businessId, nextSettings)
+    await saveBusinessSettings(businessId, nextSettings, state.branchId)
     if (section) toast.success(`Configuración de ${section} guardada`)
   }
 
