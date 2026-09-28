@@ -68,7 +68,9 @@ export function AuthProvider({ children }) {
 
       if (!profile.active) {
         await signOut(auth)
-        setError('Tu cuenta ha sido desactivada.')
+        setError(profile.activationPending
+          ? 'Tu cuenta está pendiente de activación. Nuestro equipo debe validar el servicio antes de que puedas entrar.'
+          : 'Tu cuenta o negocio está suspendido. Comunícate con soporte para recibir asistencia.')
         setLoading(false)
         return
       }
@@ -128,9 +130,7 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // ── Register — Cloud Function + auto-login ───────────────
-  // La Function crea el usuario en Auth y el perfil en Firestore.
-  // Luego hace sign in automaticamente — el usuario entra directo.
+  // ── Register — queda pendiente de activación manual ──────
   const registerBusiness = async ({ email, password, ownerName, businessName, phone, address }) => {
     setError(null)
     try {
@@ -150,13 +150,11 @@ export function AuthProvider({ children }) {
         throw new Error(result.data?.message || 'Error al crear el negocio')
       }
 
-      // Esperar a que Firestore propague los documentos
-      await new Promise(r => setTimeout(r, 3000))
-
-      // Auto-login — el usuario entra directo sin tener que loguearse
-      await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
-
-      return { success: true, businessId: result.data.businessId }
+      return {
+        success: true,
+        businessId: result.data.businessId,
+        activationPending: result.data.activationPending === true,
+      }
 
     } catch (err) {
       const msg = err.message || 'Error al crear el negocio.'

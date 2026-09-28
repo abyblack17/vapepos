@@ -10,7 +10,7 @@ import { ref as storageRef, listAll, deleteObject } from 'firebase/storage'
 import { fmt } from '../utils/helpers'
 import toast from 'react-hot-toast'
 
-const TABS = ['Resumen', 'Negocios', 'Usuarios', 'Upgrades', 'Sugerencias', 'Directorio', 'Anuncios']
+const TABS = ['Resumen', 'Activaciones', 'Negocios', 'Usuarios', 'Upgrades', 'Sugerencias', 'Directorio', 'Anuncios']
 
 const TYPE_COLORS = {
   bug:        'text-red-400 bg-red-500/10 border-red-500/20',
@@ -45,6 +45,9 @@ const endOfDayFromInput = (dateStr) => {
 }
 
 const ts = (seconds) => seconds ? new Date(seconds * 1000).toLocaleDateString('es-DO') : '—'
+const businessStatus = (business) => business.activationPending === true ? 'pending' : (business.active === false ? 'suspended' : 'active')
+const BUSINESS_STATUS_LABEL = { pending: 'Pendiente', active: 'Activo', suspended: 'Suspendido' }
+const BUSINESS_STATUS_BADGE = { pending: 'badge-amber', active: 'badge-green', suspended: 'badge-red' }
 
 export default function SuperAdmin() {
   const { logout, currentUser } = useAuth()
@@ -76,6 +79,11 @@ export default function SuperAdmin() {
   const [planExpiryInput, setPlanExpiryInput] = useState('')
   const [savingPlanExpiry, setSavingPlanExpiry] = useState(false)
   const [deletingBizId, setDeletingBizId]   = useState(null)
+  const [activationModal, setActivationModal] = useState(null)
+  const [activationPlan, setActivationPlan] = useState('pro')
+  const [activationExpiry, setActivationExpiry] = useState(addMonthsDateInput(1))
+  const [activationNote, setActivationNote] = useState('')
+  const [savingActivation, setSavingActivation] = useState(false)
 
   useEffect(() => { loadAll() }, [])
 
@@ -302,10 +310,79 @@ export default function SuperAdmin() {
     setDeletingBizId(null)
   }
 
+  const changeBusinessAccess = async (biz, status, options = {}) => {
+    const fn = httpsCallable(getFunctions(), 'setBusinessAccessAsSuperAdmin')
+    const result = await fn({ businessId: biz.id, status, ...options })
+    if (!result.data?.success) throw new Error('No se pudo actualizar el acceso del negocio.')
+    const active = status === 'active'
+    setBusinesses(prev => prev.map(b => b.id === biz.id ? {
+      ...b,
+      active,
+      activationPending: false,
+      ...(options.plan ? { plan: options.plan } : {}),
+      ...(options.planExpiresAt ? { planExpiresAt: new Date(options.planExpiresAt) } : {}),
+    } : b))
+    setAllUsers(prev => prev.map(u => {
+      if (u.businessId !== biz.id) return u
+      const managedByBusiness = u.activationPending === true || u.disabledByBusinessStatus === true || (!active && u.active === true)
+      return {
+        ...u,
+        active: active ? (managedByBusiness ? true : u.active) : false,
+        activationPending: false,
+        disabledByBusinessStatus: active ? false : managedByBusiness,
+      }
+    }))
+    if (selectedBiz?.id === biz.id) setSelectedBiz(prev => ({ ...prev, active, activationPending: false }))
+    return result.data
+  }
+
   const toggleBusiness = async (biz) => {
-    await updateDoc(doc(db, 'businesses', biz.id), { active: !biz.active })
-    setBusinesses(prev => prev.map(b => b.id === biz.id ? { ...b, active: !b.active } : b))
-    toast.success(`Negocio ${biz.active ? 'suspendido' : 'activado'}`)
+    const currentStatus = businessStatus(biz)
+    try {
+      await changeBusinessAccess(biz, currentStatus === 'active' ? 'suspended' : 'active')
+      toast.success(currentStatus === 'active' ? `Negocio "${biz.name}" suspendido` : `Negocio "${biz.name}" activado`)
+    } catch (err) {
+      toast.error('Error: ' + (err.message || 'No se pudo cambiar el acceso'))
+    }
+  }
+
+  const openActivation = (biz) => {
+    setActivationModal(biz)
+    setActivationPlan('pro')
+    setActivationExpiry(addMonthsDateInput(1))
+    setActivationNote('')
+  }
+
+  const activateBusiness = async () => {
+    if (!activationModal) return
+    if (activationPlan === 'pro' && !activationExpiry) {
+      toast.error('Selecciona la fecha de vencimiento del Plan Pro.')
+      return
+    }
+    setSavingActivation(true)
+    try {
+      const expiresAt = activationPlan === 'pro' ? endOfDayFromInput(activationExpiry)?.toISOString() : null
+      await changeBusinessAccess(activationModal, 'active', {
+        plan: activationPlan,
+        planExpiresAt: expiresAt,
+        note: activationNote.trim(),
+      })
+      toast.success(`Cuenta de "${activationModal.name}" activada`)
+      setActivationModal(null)
+    } catch (err) {
+      toast.error('Error: ' + (err.message || 'No se pudo activar la cuenta'))
+    }
+    setSavingActivation(false)
+  }
+
+  const rejectBusiness = async (biz) => {
+    if (!confirm(`¿Rechazar la solicitud de "${biz.name}"? La cuenta no podrá entrar a VapePOS.`)) return
+    try {
+      await changeBusinessAccess(biz, 'rejected')
+      toast.success('Solicitud rechazada')
+    } catch (err) {
+      toast.error('Error: ' + (err.message || 'No se pudo rechazar la solicitud'))
+    }
   }
 
   const toggleUser = async (user) => {
@@ -468,7 +545,8 @@ export default function SuperAdmin() {
   }
 
   // ── Stats ────────────────────────────────────────────────
-  const activeBusinesses = businesses.filter(b => b.active !== false).length
+  const activeBusinesses = businesses.filter(b => businessStatus(b) === 'active').length
+  const pendingBusinesses = businesses.filter(b => businessStatus(b) === 'pending')
   const proBusinesses    = businesses.filter(b => b.plan === 'pro').length
   const realUsers        = allUsers.filter(u => u.role !== 'superadmin')
   const newSuggestions   = suggestions.filter(s => s.status === 'nuevo' && !s.fromAdmin).length
@@ -501,7 +579,7 @@ export default function SuperAdmin() {
   const bizTotalRefills = bizSales.reduce((a, s) => a + (s.refills?.length || 0), 0)
 
   return (
-    <div className="min-h-screen bg-[#080d18]">
+    <div className="h-screen overflow-y-auto overscroll-contain bg-[#080d18]" style={{ height: '100dvh' }}>
       {/* Header */}
       <div className="bg-[#0c1424] border-b border-white/5 px-4 py-3 flex items-center justify-between sticky top-0 z-10 gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -535,6 +613,9 @@ export default function SuperAdmin() {
                 {t === 'Upgrades' && pendingUpgrades > 0 && (
                   <span className="absolute -top-1 -right-1 bg-[#f59e0b] text-black text-xs w-4 h-4 rounded-full flex items-center justify-center">{pendingUpgrades}</span>
                 )}
+                {t === 'Activaciones' && pendingBusinesses.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-[#f59e0b] text-black text-xs w-4 h-4 rounded-full flex items-center justify-center">{pendingBusinesses.length}</span>
+                )}
               </button>
             ))}
           </div>
@@ -547,9 +628,10 @@ export default function SuperAdmin() {
           {/* ══════════ RESUMEN ══════════ */}
           {tab === 'Resumen' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 {[
                   { label: 'Negocios activos',     value: activeBusinesses,  sub: `${proBusinesses} en Pro`,           color: 'text-[#00e5a0]', icon: '🏪', goto: 'Negocios' },
+                  { label: 'Activaciones pendientes', value: pendingBusinesses.length, sub: 'Requieren revisión manual', color: 'text-[#f59e0b]', icon: '⏳', goto: 'Activaciones' },
                   { label: 'Usuarios registrados', value: realUsers.length,  sub: `${realUsers.filter(u=>u.active).length} activos`, color: 'text-[#00c4e8]', icon: '👥', goto: 'Usuarios' },
                   { label: 'Upgrades pendientes',  value: pendingUpgrades,   sub: `${upgradeRequests.length} totales`, color: 'text-[#f59e0b]', icon: '⚡', goto: 'Upgrades' },
                   { label: 'Sugerencias nuevas',   value: newSuggestions,    sub: `${filteredSuggestions.length} totales`, color: 'text-[#a78bfa]', icon: '💬', goto: 'Sugerencias' },
@@ -596,6 +678,55 @@ export default function SuperAdmin() {
             </div>
           )}
 
+          {/* ══════════ ACTIVACIONES ══════════ */}
+          {tab === 'Activaciones' && (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <div className="font-display text-xl font-bold text-slate-100">Solicitudes pendientes</div>
+                  <div className="text-sm text-slate-500 mt-1">Solo las cuentas que actives manualmente podrán entrar a VapePOS.</div>
+                </div>
+                <div className="badge badge-amber">{pendingBusinesses.length} pendientes</div>
+              </div>
+
+              {pendingBusinesses.length === 0 ? (
+                <div className="bg-[#0c1424] border border-white/10 rounded-xl p-12 text-center">
+                  <div className="text-3xl mb-3">✓</div>
+                  <div className="font-semibold text-slate-300">No hay cuentas esperando activación</div>
+                  <div className="text-sm text-slate-500 mt-1">Los registros nuevos aparecerán aquí automáticamente.</div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {pendingBusinesses.map(b => {
+                    const owner = allUsers.find(u => u.id === b.ownerId) || allUsers.find(u => u.businessId === b.id && u.role === 'Administrador')
+                    return (
+                      <div key={b.id} className="bg-[#0c1424] border border-[#f59e0b]/25 rounded-xl p-5 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-bold text-slate-100 text-lg">{b.name}</div>
+                            <div className="text-xs text-slate-600 font-mono mt-0.5">{b.id}</div>
+                          </div>
+                          <span className="badge badge-amber">Pendiente</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                          <div className="bg-[#101c35] rounded-lg p-3"><div className="text-xs text-slate-500">Propietario</div><div className="text-slate-300 mt-1">{owner?.displayName || '—'}</div></div>
+                          <div className="bg-[#101c35] rounded-lg p-3"><div className="text-xs text-slate-500">Correo</div><div className="text-slate-300 mt-1 break-all">{owner?.email || '—'}</div></div>
+                          <div className="bg-[#101c35] rounded-lg p-3"><div className="text-xs text-slate-500">Teléfono</div><div className="text-slate-300 mt-1">{b.phone || '—'}</div></div>
+                          <div className="bg-[#101c35] rounded-lg p-3"><div className="text-xs text-slate-500">Registro</div><div className="text-slate-300 mt-1">{ts(b.createdAt?.seconds)}</div></div>
+                        </div>
+                        {b.address && <div className="text-xs text-slate-400">📍 {b.address}</div>}
+                        <div className="flex gap-2">
+                          <button onClick={() => openActivation(b)} className="btn-primary flex-1">✓ Revisar y activar</button>
+                          <button onClick={() => rejectBusiness(b)} className="px-4 py-2 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 text-sm font-semibold">Rechazar</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ══════════ NEGOCIOS ══════════ */}
           {tab === 'Negocios' && (
             <div className="space-y-4">
@@ -614,6 +745,7 @@ export default function SuperAdmin() {
                 {filteredBusinesses.map(b => {
                   const bizUsers = allUsers.filter(u => u.businessId === b.id && u.role !== 'superadmin')
                   const expires  = b.planExpiresAt ? (b.planExpiresAt?.toDate?.() || new Date(b.planExpiresAt)) : null
+                  const status = businessStatus(b)
                   return (
                     <div key={b.id} className="bg-[#0c1424] border border-white/10 rounded-xl p-4 space-y-3"
                       onClick={() => handleSelectBiz(b)}>
@@ -626,8 +758,8 @@ export default function SuperAdmin() {
                           <span className={`badge ${b.plan === 'pro' ? 'badge-green' : 'badge-gray'}`}>
                             {b.plan === 'pro' ? '⚡ Pro' : 'Básico'}
                           </span>
-                          <span className={`badge ${b.active !== false ? 'badge-green' : 'badge-red'}`}>
-                            {b.active !== false ? 'Activo' : 'Suspendido'}
+                          <span className={`badge ${BUSINESS_STATUS_BADGE[status] || 'badge-gray'}`}>
+                            {BUSINESS_STATUS_LABEL[status] || status}
                           </span>
                         </div>
                       </div>
@@ -652,11 +784,11 @@ export default function SuperAdmin() {
                         </button>
                         <button onClick={() => toggleBusiness(b)}
                           className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
-                            b.active !== false
+                            status === 'active'
                               ? 'border-red-500/20 text-red-400 hover:bg-red-500/10'
                               : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
                           }`}>
-                          {b.active !== false ? 'Suspender' : 'Activar'}
+                          {status === 'active' ? 'Suspender' : 'Activar'}
                         </button>
                         <button onClick={() => { setMsgModal(b); setMsgText('') }}
                           className="flex-1 text-xs px-3 py-2 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
@@ -685,6 +817,7 @@ export default function SuperAdmin() {
                     {filteredBusinesses.map(b => {
                       const bizUsers = allUsers.filter(u => u.businessId === b.id && u.role !== 'superadmin')
                       const expires  = b.planExpiresAt ? (b.planExpiresAt?.toDate?.() || new Date(b.planExpiresAt)) : null
+                      const status = businessStatus(b)
                       return (
                         <tr key={b.id} className="table-row cursor-pointer" onClick={() => handleSelectBiz(b)}>
                           <td className="table-cell">
@@ -703,8 +836,8 @@ export default function SuperAdmin() {
                           <td className="table-cell text-center"><span className="badge badge-blue">{bizUsers.length}</span></td>
                           <td className="table-cell text-slate-500 text-xs">{ts(b.createdAt?.seconds)}</td>
                           <td className="table-cell">
-                            <span className={`badge ${b.active !== false ? 'badge-green' : 'badge-red'}`}>
-                              {b.active !== false ? 'Activo' : 'Suspendido'}
+                            <span className={`badge ${BUSINESS_STATUS_BADGE[status] || 'badge-gray'}`}>
+                              {BUSINESS_STATUS_LABEL[status] || status}
                             </span>
                           </td>
                           <td className="table-cell" onClick={e => e.stopPropagation()}>
@@ -723,11 +856,11 @@ export default function SuperAdmin() {
                               </button>
                               <button onClick={() => toggleBusiness(b)}
                                 className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
-                                  b.active !== false
+                                  status === 'active'
                                     ? 'border-red-500/20 text-red-400 hover:bg-red-500/10'
                                     : 'border-[#00e5a0]/20 text-[#00e5a0] hover:bg-[#00e5a0]/10'
                                 }`}>
-                                {b.active !== false ? 'Suspender' : 'Activar'}
+                                {status === 'active' ? 'Suspender' : 'Activar'}
                               </button>
                               <button onClick={() => { setMsgModal(b); setMsgText('') }}
                                 className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
@@ -1229,6 +1362,48 @@ export default function SuperAdmin() {
       </div>
 
 
+
+      {/* ── Modal activación manual ── */}
+      {activationModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0c1424] border border-[#f59e0b]/30 rounded-2xl p-6 w-full max-w-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-100 text-lg">Activar cuenta</div>
+                <div className="text-xs text-slate-500 mt-0.5">{activationModal.name}</div>
+              </div>
+              <button onClick={() => setActivationModal(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <div className="alert-info text-xs">La cuenta y sus usuarios recibirán acceso inmediatamente después de confirmar.</div>
+            <div>
+              <label className="label">Plan inicial</label>
+              <select className="select" value={activationPlan} onChange={e => setActivationPlan(e.target.value)}>
+                <option value="pro">Plan Pro</option>
+                <option value="starter">Plan Básico</option>
+              </select>
+            </div>
+            {activationPlan === 'pro' && (
+              <div>
+                <label className="label">Vencimiento del Plan Pro</label>
+                <input className="input" type="date" value={activationExpiry} onChange={e => setActivationExpiry(e.target.value)} />
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(1))}>+1 mes</button>
+                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(3))}>+3 meses</button>
+                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(12))}>+1 año</button>
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="label">Nota administrativa (opcional)</label>
+              <textarea className="input resize-none" rows={3} maxLength={300} value={activationNote} onChange={e => setActivationNote(e.target.value)} placeholder="Ej.: Pago verificado por transferencia" />
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <button className="btn-secondary" onClick={() => setActivationModal(null)}>Cancelar</button>
+              <button className="btn-primary" disabled={savingActivation} onClick={activateBusiness}>{savingActivation ? 'Activando...' : 'Confirmar activación'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal cambiar vencimiento Pro ── */}
       {planModal && (

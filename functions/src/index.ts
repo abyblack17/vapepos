@@ -463,7 +463,9 @@ export const registerBusiness = onCall(
         address: data.address?.trim() || '',
         ownerId: uid,
         plan: 'starter',
-        active: true,
+        active: false,
+        activationPending: true,
+        activationRequestedAt: now,
         createdAt: now,
         updatedAt: now,
       })
@@ -473,7 +475,8 @@ export const registerBusiness = onCall(
       batch.set(db.doc(`users/${uid}`), {
         businessId,
         role: 'Administrador',
-        active: true,
+        active: false,
+        activationPending: true,
         email: data.email.trim().toLowerCase(),
         displayName: data.ownerName.trim(),
         createdAt: now,
@@ -484,7 +487,8 @@ export const registerBusiness = onCall(
         uid,
         businessId,
         role: 'Administrador',
-        active: true,
+        active: false,
+        activationPending: true,
         email: data.email.trim().toLowerCase(),
         displayName: data.ownerName.trim(),
         createdAt: now,
@@ -493,7 +497,7 @@ export const registerBusiness = onCall(
 
       await batch.commit()
 
-      await setAccessClaims(uid, businessId, 'Administrador', true)
+      await setAccessClaims(uid, businessId, 'Administrador', false)
 
       await db.collection(`businesses/${businessId}/audit_logs`).add({
         action: 'REGISTER_BUSINESS',
@@ -504,12 +508,12 @@ export const registerBusiness = onCall(
         targetId: businessId,
         targetName: data.businessName.trim(),
         before: null,
-        after: { businessName: data.businessName.trim(), plan: 'starter' },
+        after: { businessName: data.businessName.trim(), plan: 'starter', activationPending: true },
         businessId,
         createdAt: now,
       })
 
-      return { success: true, businessId, uid }
+      return { success: true, businessId, uid, activationPending: true }
     } catch (err: any) {
       if (createdUid) await auth.deleteUser(createdUid).catch(() => undefined)
       if (err.code === 'auth/email-already-exists') {
@@ -1113,6 +1117,108 @@ export const activateTrial = onCall(
     })
 
     return { success: true, expiresAt: expiresAt.toISOString() }
+  }
+)
+
+// ══════════════════════════════════════════════════════════════
+// SuperAdmin: activar, suspender o rechazar un negocio completo
+// ══════════════════════════════════════════════════════════════
+export const setBusinessAccessAsSuperAdmin = onCall(
+  { region: 'us-central1', enforceAppCheck: true },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
+
+    const caller = await db.doc(`users/${request.auth.uid}`).get()
+    if (!caller.exists || caller.data()?.active !== true || caller.data()?.role !== 'superadmin') {
+      throw new HttpsError('permission-denied', 'Solo el super admin puede cambiar el acceso de un negocio.')
+    }
+
+    const data = request.data as {
+      businessId?: string
+      status?: 'active' | 'suspended' | 'rejected'
+      plan?: 'starter' | 'pro'
+      planExpiresAt?: string | null
+      note?: string
+    }
+    const businessId = String(data.businessId || '')
+    const status = String(data.status || '')
+    if (!businessId || !['active', 'suspended', 'rejected'].includes(status)) {
+      throw new HttpsError('invalid-argument', 'Negocio y estado válidos son requeridos.')
+    }
+
+    const businessRef = db.doc(`businesses/${businessId}`)
+    const businessSnap = await businessRef.get()
+    if (!businessSnap.exists) throw new HttpsError('not-found', 'Negocio no encontrado.')
+
+    const now = FieldValue.serverTimestamp()
+    const activating = status === 'active'
+    const businessUpdate: Record<string, any> = {
+      active: activating,
+      activationPending: false,
+      updatedAt: now,
+      accessUpdatedAt: now,
+      accessUpdatedBy: request.auth.token.email || request.auth.uid,
+    }
+    if (status === 'active') {
+      businessUpdate.activatedAt = now
+      businessUpdate.activationNote = String(data.note || '').slice(0, 300)
+      businessUpdate.rejectionReason = FieldValue.delete()
+      businessUpdate.suspensionReason = FieldValue.delete()
+      if (data.plan === 'starter' || data.plan === 'pro') businessUpdate.plan = data.plan
+      if (data.plan === 'pro' && data.planExpiresAt) {
+        const expiry = new Date(data.planExpiresAt)
+        if (Number.isNaN(expiry.getTime())) throw new HttpsError('invalid-argument', 'Fecha de vencimiento inválida.')
+        businessUpdate.planExpiresAt = Timestamp.fromDate(expiry)
+        businessUpdate.planActivatedAt = now
+      }
+    } else if (status === 'suspended') {
+      businessUpdate.suspensionReason = String(data.note || '').slice(0, 300)
+      businessUpdate.suspendedAt = now
+    } else {
+      businessUpdate.rejectionReason = String(data.note || '').slice(0, 300)
+      businessUpdate.rejectedAt = now
+    }
+
+    const usersSnap = await db.collection('users').where('businessId', '==', businessId).get()
+    const batch = db.batch()
+    batch.update(businessRef, businessUpdate)
+
+    for (const userDoc of usersSnap.docs) {
+      const user = userDoc.data()
+      const shouldEnable = activating && (user.activationPending === true || user.disabledByBusinessStatus === true)
+      const nextActive = activating ? (shouldEnable ? true : user.active === true) : false
+      const userUpdate: Record<string, any> = {
+        active: nextActive,
+        activationPending: false,
+        updatedAt: now,
+      }
+      if (!activating && user.active === true) userUpdate.disabledByBusinessStatus = true
+      if (activating && shouldEnable) userUpdate.disabledByBusinessStatus = FieldValue.delete()
+      batch.update(userDoc.ref, userUpdate)
+
+      const businessUserRef = db.doc(`businesses/${businessId}/users/${userDoc.id}`)
+      batch.set(businessUserRef, userUpdate, { merge: true })
+
+      await auth.updateUser(userDoc.id, { disabled: !nextActive })
+      await setAccessClaims(userDoc.id, businessId, String(user.role || ''), nextActive)
+    }
+
+    batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+      action: activating ? 'ACTIVATE_BUSINESS' : status === 'suspended' ? 'SUSPEND_BUSINESS' : 'REJECT_BUSINESS',
+      module: 'system',
+      userId: request.auth.uid,
+      userName: request.auth.token.email || 'SuperAdmin',
+      role: 'superadmin',
+      targetId: businessId,
+      targetName: businessSnap.data()?.name || businessId,
+      before: { active: businessSnap.data()?.active, activationPending: businessSnap.data()?.activationPending === true },
+      after: { active: activating, activationPending: false, plan: businessUpdate.plan || businessSnap.data()?.plan, note: String(data.note || '').slice(0, 300) },
+      businessId,
+      createdAt: now,
+    })
+    await batch.commit()
+
+    return { success: true, status, usersUpdated: usersSnap.size }
   }
 )
 

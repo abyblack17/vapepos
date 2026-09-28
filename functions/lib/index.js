@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
+exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.setBusinessAccessAsSuperAdmin = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
 const app_1 = require("firebase-admin/app");
@@ -466,7 +466,9 @@ exports.registerBusiness = (0, https_1.onCall)({ region: 'us-central1', enforceA
             address: ((_d = data.address) === null || _d === void 0 ? void 0 : _d.trim()) || '',
             ownerId: uid,
             plan: 'starter',
-            active: true,
+            active: false,
+            activationPending: true,
+            activationRequestedAt: now,
             createdAt: now,
             updatedAt: now,
         });
@@ -474,7 +476,8 @@ exports.registerBusiness = (0, https_1.onCall)({ region: 'us-central1', enforceA
         batch.set(db.doc(`users/${uid}`), {
             businessId,
             role: 'Administrador',
-            active: true,
+            active: false,
+            activationPending: true,
             email: data.email.trim().toLowerCase(),
             displayName: data.ownerName.trim(),
             createdAt: now,
@@ -484,14 +487,15 @@ exports.registerBusiness = (0, https_1.onCall)({ region: 'us-central1', enforceA
             uid,
             businessId,
             role: 'Administrador',
-            active: true,
+            active: false,
+            activationPending: true,
             email: data.email.trim().toLowerCase(),
             displayName: data.ownerName.trim(),
             createdAt: now,
             updatedAt: now,
         });
         await batch.commit();
-        await setAccessClaims(uid, businessId, 'Administrador', true);
+        await setAccessClaims(uid, businessId, 'Administrador', false);
         await db.collection(`businesses/${businessId}/audit_logs`).add({
             action: 'REGISTER_BUSINESS',
             module: 'system',
@@ -501,11 +505,11 @@ exports.registerBusiness = (0, https_1.onCall)({ region: 'us-central1', enforceA
             targetId: businessId,
             targetName: data.businessName.trim(),
             before: null,
-            after: { businessName: data.businessName.trim(), plan: 'starter' },
+            after: { businessName: data.businessName.trim(), plan: 'starter', activationPending: true },
             businessId,
             createdAt: now,
         });
-        return { success: true, businessId, uid };
+        return { success: true, businessId, uid, activationPending: true };
     }
     catch (err) {
         if (createdUid)
@@ -1015,6 +1019,97 @@ exports.activateTrial = (0, https_1.onCall)({ region: 'us-central1', enforceAppC
         createdAt: firestore_2.FieldValue.serverTimestamp(),
     });
     return { success: true, expiresAt: expiresAt.toISOString() };
+});
+// ══════════════════════════════════════════════════════════════
+// SuperAdmin: activar, suspender o rechazar un negocio completo
+// ══════════════════════════════════════════════════════════════
+exports.setBusinessAccessAsSuperAdmin = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
+    var _a, _b, _c, _d, _e, _f;
+    if (!request.auth)
+        throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
+    const caller = await db.doc(`users/${request.auth.uid}`).get();
+    if (!caller.exists || ((_a = caller.data()) === null || _a === void 0 ? void 0 : _a.active) !== true || ((_b = caller.data()) === null || _b === void 0 ? void 0 : _b.role) !== 'superadmin') {
+        throw new https_1.HttpsError('permission-denied', 'Solo el super admin puede cambiar el acceso de un negocio.');
+    }
+    const data = request.data;
+    const businessId = String(data.businessId || '');
+    const status = String(data.status || '');
+    if (!businessId || !['active', 'suspended', 'rejected'].includes(status)) {
+        throw new https_1.HttpsError('invalid-argument', 'Negocio y estado válidos son requeridos.');
+    }
+    const businessRef = db.doc(`businesses/${businessId}`);
+    const businessSnap = await businessRef.get();
+    if (!businessSnap.exists)
+        throw new https_1.HttpsError('not-found', 'Negocio no encontrado.');
+    const now = firestore_2.FieldValue.serverTimestamp();
+    const activating = status === 'active';
+    const businessUpdate = {
+        active: activating,
+        activationPending: false,
+        updatedAt: now,
+        accessUpdatedAt: now,
+        accessUpdatedBy: request.auth.token.email || request.auth.uid,
+    };
+    if (status === 'active') {
+        businessUpdate.activatedAt = now;
+        businessUpdate.activationNote = String(data.note || '').slice(0, 300);
+        businessUpdate.rejectionReason = firestore_2.FieldValue.delete();
+        businessUpdate.suspensionReason = firestore_2.FieldValue.delete();
+        if (data.plan === 'starter' || data.plan === 'pro')
+            businessUpdate.plan = data.plan;
+        if (data.plan === 'pro' && data.planExpiresAt) {
+            const expiry = new Date(data.planExpiresAt);
+            if (Number.isNaN(expiry.getTime()))
+                throw new https_1.HttpsError('invalid-argument', 'Fecha de vencimiento inválida.');
+            businessUpdate.planExpiresAt = firestore_2.Timestamp.fromDate(expiry);
+            businessUpdate.planActivatedAt = now;
+        }
+    }
+    else if (status === 'suspended') {
+        businessUpdate.suspensionReason = String(data.note || '').slice(0, 300);
+        businessUpdate.suspendedAt = now;
+    }
+    else {
+        businessUpdate.rejectionReason = String(data.note || '').slice(0, 300);
+        businessUpdate.rejectedAt = now;
+    }
+    const usersSnap = await db.collection('users').where('businessId', '==', businessId).get();
+    const batch = db.batch();
+    batch.update(businessRef, businessUpdate);
+    for (const userDoc of usersSnap.docs) {
+        const user = userDoc.data();
+        const shouldEnable = activating && (user.activationPending === true || user.disabledByBusinessStatus === true);
+        const nextActive = activating ? (shouldEnable ? true : user.active === true) : false;
+        const userUpdate = {
+            active: nextActive,
+            activationPending: false,
+            updatedAt: now,
+        };
+        if (!activating && user.active === true)
+            userUpdate.disabledByBusinessStatus = true;
+        if (activating && shouldEnable)
+            userUpdate.disabledByBusinessStatus = firestore_2.FieldValue.delete();
+        batch.update(userDoc.ref, userUpdate);
+        const businessUserRef = db.doc(`businesses/${businessId}/users/${userDoc.id}`);
+        batch.set(businessUserRef, userUpdate, { merge: true });
+        await auth.updateUser(userDoc.id, { disabled: !nextActive });
+        await setAccessClaims(userDoc.id, businessId, String(user.role || ''), nextActive);
+    }
+    batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+        action: activating ? 'ACTIVATE_BUSINESS' : status === 'suspended' ? 'SUSPEND_BUSINESS' : 'REJECT_BUSINESS',
+        module: 'system',
+        userId: request.auth.uid,
+        userName: request.auth.token.email || 'SuperAdmin',
+        role: 'superadmin',
+        targetId: businessId,
+        targetName: ((_c = businessSnap.data()) === null || _c === void 0 ? void 0 : _c.name) || businessId,
+        before: { active: (_d = businessSnap.data()) === null || _d === void 0 ? void 0 : _d.active, activationPending: ((_e = businessSnap.data()) === null || _e === void 0 ? void 0 : _e.activationPending) === true },
+        after: { active: activating, activationPending: false, plan: businessUpdate.plan || ((_f = businessSnap.data()) === null || _f === void 0 ? void 0 : _f.plan), note: String(data.note || '').slice(0, 300) },
+        businessId,
+        createdAt: now,
+    });
+    await batch.commit();
+    return { success: true, status, usersUpdated: usersSnap.size };
 });
 // ══════════════════════════════════════════════════════════════
 // 8. updateUserAsSuperAdmin — Super admin edita correo, nombre, rol, estado y contraseña
