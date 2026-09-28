@@ -7,6 +7,7 @@ import UpgradeModal from '../components/ui/UpgradeModal'
 import { defaultPermissions } from '../utils/helpers'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
+import { useBranches } from '../contexts/BranchContext'
 
 const ROLE_INFO = {
   Administrador: { badge: 'badge-purple', desc: 'Acceso completo' },
@@ -45,6 +46,7 @@ export default function Users() {
   const { state, dispatch }    = useApp()
   const { currentUser, addEmployee, updateUserRole, updateUserPermissions, deleteUser } = useAuth()
   const { canAdd, usage, upgradeMessage } = usePlan()
+  const { branchesEnabled, allBranches, selectedBranchId, setUserBranch } = useBranches()
   const [modal, setModal]      = useState(null)
   const [loading, setLoading]  = useState(false)
   const [showUpgrade, setShowUpgrade] = useState(false)
@@ -54,6 +56,17 @@ export default function Users() {
   const lockedUsers  = state.users.filter(u => u.planLocked)
   const userUsage    = usage('users')
   const canAddUser   = canAdd('users')
+  const canAssignBranch = branchesEnabled && isAdmin && selectedBranchId === 'main'
+
+  const handleBranchAssignment = async (user, branchId) => {
+    setLoading(true)
+    try {
+      const result = await setUserBranch(user.id, branchId)
+      dispatch({ type: 'UPDATE_USER', payload: { ...user, branchIds: result.branchIds } })
+      toast.success(branchId ? 'Sucursal asignada' : 'Usuario sin sucursal')
+    } catch (error) { toast.error(error.message || 'No se pudo asignar la sucursal') }
+    finally { setLoading(false) }
+  }
 
   const handleAddEmployee = async (data) => {
     if (!canAddUser) { setShowUpgrade(true); return }
@@ -183,7 +196,7 @@ export default function Users() {
         <table className="w-full">
           <thead>
             <tr>
-              {['Usuario', 'Email', 'Rol', 'Estado', 'Permisos', 'Acciones'].map(h => (
+              {['Usuario', 'Email', 'Rol', ...(branchesEnabled ? ['Sucursal'] : []), 'Estado', 'Permisos', 'Acciones'].map(h => (
                 <th key={h} className="table-header">{h}</th>
               ))}
             </tr>
@@ -206,6 +219,14 @@ export default function Users() {
                 <td className="table-cell">
                   <span className={`badge ${ROLE_INFO[u.role]?.badge || 'badge-gray'}`}>{u.role}</span>
                 </td>
+                {branchesEnabled && <td className="table-cell min-w-[180px]">
+                  {u.role === 'Administrador' ? <span className="text-xs text-[#a78bfa]">Todas las sucursales</span> : (
+                    <select className="select !py-1.5 !text-xs" disabled={!canAssignBranch || loading} value={u.branchIds?.[0] || ''} onChange={event => handleBranchAssignment(u, event.target.value)}>
+                      <option value="">Sin asignar</option>
+                      {allBranches.filter(branch => branch.active !== false).map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                    </select>
+                  )}
+                </td>}
                 <td className="table-cell">
                   <span className={`badge ${u.active ? 'badge-green' : 'badge-red'}`}>
                     {u.active ? 'Activo' : 'Inactivo'}
@@ -237,7 +258,7 @@ export default function Users() {
               </tr>
             ))}
             {activeUsers.length === 0 && (
-              <tr><td colSpan={6} className="table-cell text-center text-slate-500 py-10">No hay usuarios registrados</td></tr>
+              <tr><td colSpan={branchesEnabled ? 7 : 6} className="table-cell text-center text-slate-500 py-10">No hay usuarios registrados</td></tr>
             )}
           </tbody>
         </table>

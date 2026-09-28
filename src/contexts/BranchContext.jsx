@@ -98,6 +98,13 @@ export function BranchProvider({ children }) {
     return result.data
   }
 
+  const setUserBranch = async (userId, branchId) => {
+    if (currentUser?.role !== 'Administrador') throw new Error('Solo el Administrador principal puede asignar empleados.')
+    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const result = await fn({ action: 'setUserBranch', userId, branchId })
+    return result.data
+  }
+
   const transferStock = async ({ itemType, itemId, sourceBranchId, targetBranchId, quantity }) => {
     if (!canManageBranches) throw new Error('No tienes permiso para transferir inventario.')
     const fn = httpsCallable(getFunctions(), 'manageTestBranch')
@@ -110,7 +117,7 @@ export function BranchProvider({ children }) {
 
   return <BranchContext.Provider value={{
     branchesEnabled, loadingBranches, branches, allBranches, selectedBranch, selectedBranchId, canManageBranches,
-    selectBranch, createBranch, setBranchActive, assignUser, transferStock,
+    selectBranch, createBranch, setBranchActive, assignUser, setUserBranch, transferStock,
     activeAdditionalCount: activeAdditionalBranches.length,
     monthlyBranchCost: activeAdditionalBranches.length * BRANCH_MONTHLY_PRICE,
   }}>{children}</BranchContext.Provider>

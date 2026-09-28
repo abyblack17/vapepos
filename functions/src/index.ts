@@ -1134,15 +1134,19 @@ export const manageTestBranch = onCall(
       throw new HttpsError('permission-denied', 'Cuenta activa requerida.')
     }
 
-    const businessUsers = await db.collection(`businesses/${businessId}/users`).get()
-    const isTestBusiness = businessUsers.docs.some(item => String(item.data()?.email || '').trim().toLowerCase() === 'test01@gmail.com')
+    const email = String(request.auth.token.email || '').trim().toLowerCase()
+    const branchesRef = db.collection(`businesses/${businessId}/branches`)
+    const [businessUsers, existingBranches] = await Promise.all([
+      db.collection(`businesses/${businessId}/users`).get(),
+      branchesRef.limit(1).get(),
+    ])
+    const isTestBusiness = email === 'test01@gmail.com'
+      || !existingBranches.empty
+      || businessUsers.docs.some(item => String(item.data()?.email || '').trim().toLowerCase() === 'test01@gmail.com')
     if (!isTestBusiness) throw new HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para el negocio Tests.')
     const canManage = profile?.role === 'Administrador' || (profile?.role === 'Encargado' && profile?.permissions?.branches === true)
     if (!canManage) throw new HttpsError('permission-denied', 'No tienes permiso para administrar sucursales.')
-    const email = String(request.auth.token.email || '').trim().toLowerCase()
-
     const action = String(request.data?.action || '')
-    const branchesRef = db.collection(`businesses/${businessId}/branches`)
     const now = FieldValue.serverTimestamp()
 
     if (action === 'create') {
@@ -1211,6 +1215,38 @@ export const manageTestBranch = onCall(
         userId: request.auth.uid, userName: email, role: profile?.role, targetId: userId,
         targetName: globalSnap.data()?.displayName || globalSnap.data()?.email || userId,
         businessId, after: { branchId, branchIds: nextIds }, createdAt: now,
+      })
+      await batch.commit()
+      return { success: true, userId, branchIds: nextIds }
+    }
+
+    if (action === 'setUserBranch') {
+      if (profile?.role !== 'Administrador') throw new HttpsError('permission-denied', 'Solo el Administrador principal puede asignar empleados.')
+      const branchId = String(request.data?.branchId || '')
+      const userId = String(request.data?.userId || '')
+      if (!userId) throw new HttpsError('invalid-argument', 'Usuario requerido.')
+      if (branchId && branchId !== 'main') {
+        const selectedBranch = await branchesRef.doc(branchId).get()
+        if (!selectedBranch.exists || selectedBranch.data()?.active === false) throw new HttpsError('failed-precondition', 'La sucursal seleccionada no está activa.')
+      }
+      const targetGlobalRef = db.doc(`users/${userId}`)
+      const targetBusinessRef = db.doc(`businesses/${businessId}/users/${userId}`)
+      const [globalSnap, businessSnap] = await Promise.all([targetGlobalRef.get(), targetBusinessRef.get()])
+      if (!globalSnap.exists || globalSnap.data()?.businessId !== businessId || !businessSnap.exists) throw new HttpsError('not-found', 'Usuario no encontrado en este negocio.')
+      if (globalSnap.data()?.role === 'Administrador') throw new HttpsError('failed-precondition', 'El Administrador principal tiene acceso general.')
+      if (branchId) {
+        const assignedCount = businessUsers.docs.filter(item => item.id !== userId && item.data()?.role !== 'Administrador' && Array.isArray(item.data()?.branchIds) && item.data()?.branchIds.includes(branchId)).length
+        if (assignedCount >= 2) throw new HttpsError('failed-precondition', 'Esta sucursal ya tiene el máximo de 2 usuarios asignados.')
+      }
+      const nextIds = branchId ? [branchId] : []
+      const batch = db.batch()
+      batch.update(targetGlobalRef, { branchIds: nextIds, updatedAt: now })
+      batch.update(targetBusinessRef, { branchIds: nextIds, updatedAt: now })
+      batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+        action: branchId ? 'SET_USER_BRANCH' : 'UNASSIGN_BRANCH_USER', module: 'branches',
+        userId: request.auth.uid, userName: email, role: profile?.role, targetId: userId,
+        targetName: globalSnap.data()?.displayName || globalSnap.data()?.email || userId,
+        businessId, after: { branchId: branchId || null, branchIds: nextIds }, createdAt: now,
       })
       await batch.commit()
       return { success: true, userId, branchIds: nextIds }

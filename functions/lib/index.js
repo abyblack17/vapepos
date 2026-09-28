@@ -1024,7 +1024,7 @@ exports.activateTrial = (0, https_1.onCall)({ region: 'us-central1', enforceAppC
 // Sucursales beta: exclusivamente cuenta Tests
 // ══════════════════════════════════════════════════════════════
 exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10;
     if (!request.auth)
         throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
     const profileSnap = await db.doc(`users/${request.auth.uid}`).get();
@@ -1033,16 +1033,21 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
     if (!profileSnap.exists || (profile === null || profile === void 0 ? void 0 : profile.active) !== true || !businessId) {
         throw new https_1.HttpsError('permission-denied', 'Cuenta activa requerida.');
     }
-    const businessUsers = await db.collection(`businesses/${businessId}/users`).get();
-    const isTestBusiness = businessUsers.docs.some(item => { var _a; return String(((_a = item.data()) === null || _a === void 0 ? void 0 : _a.email) || '').trim().toLowerCase() === 'test01@gmail.com'; });
+    const email = String(request.auth.token.email || '').trim().toLowerCase();
+    const branchesRef = db.collection(`businesses/${businessId}/branches`);
+    const [businessUsers, existingBranches] = await Promise.all([
+        db.collection(`businesses/${businessId}/users`).get(),
+        branchesRef.limit(1).get(),
+    ]);
+    const isTestBusiness = email === 'test01@gmail.com'
+        || !existingBranches.empty
+        || businessUsers.docs.some(item => { var _a; return String(((_a = item.data()) === null || _a === void 0 ? void 0 : _a.email) || '').trim().toLowerCase() === 'test01@gmail.com'; });
     if (!isTestBusiness)
         throw new https_1.HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para el negocio Tests.');
     const canManage = (profile === null || profile === void 0 ? void 0 : profile.role) === 'Administrador' || ((profile === null || profile === void 0 ? void 0 : profile.role) === 'Encargado' && ((_a = profile === null || profile === void 0 ? void 0 : profile.permissions) === null || _a === void 0 ? void 0 : _a.branches) === true);
     if (!canManage)
         throw new https_1.HttpsError('permission-denied', 'No tienes permiso para administrar sucursales.');
-    const email = String(request.auth.token.email || '').trim().toLowerCase();
     const action = String(((_b = request.data) === null || _b === void 0 ? void 0 : _b.action) || '');
-    const branchesRef = db.collection(`businesses/${businessId}/branches`);
     const now = firestore_2.FieldValue.serverTimestamp();
     if (action === 'create') {
         const name = String(((_c = request.data) === null || _c === void 0 ? void 0 : _c.name) || '').trim().slice(0, 80);
@@ -1118,14 +1123,51 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
         await batch.commit();
         return { success: true, userId, branchIds: nextIds };
     }
-    if (action === 'saveSettings') {
+    if (action === 'setUserBranch') {
+        if ((profile === null || profile === void 0 ? void 0 : profile.role) !== 'Administrador')
+            throw new https_1.HttpsError('permission-denied', 'Solo el Administrador principal puede asignar empleados.');
         const branchId = String(((_u = request.data) === null || _u === void 0 ? void 0 : _u.branchId) || '');
-        const incoming = (_v = request.data) === null || _v === void 0 ? void 0 : _v.settings;
+        const userId = String(((_v = request.data) === null || _v === void 0 ? void 0 : _v.userId) || '');
+        if (!userId)
+            throw new https_1.HttpsError('invalid-argument', 'Usuario requerido.');
+        if (branchId && branchId !== 'main') {
+            const selectedBranch = await branchesRef.doc(branchId).get();
+            if (!selectedBranch.exists || ((_w = selectedBranch.data()) === null || _w === void 0 ? void 0 : _w.active) === false)
+                throw new https_1.HttpsError('failed-precondition', 'La sucursal seleccionada no está activa.');
+        }
+        const targetGlobalRef = db.doc(`users/${userId}`);
+        const targetBusinessRef = db.doc(`businesses/${businessId}/users/${userId}`);
+        const [globalSnap, businessSnap] = await Promise.all([targetGlobalRef.get(), targetBusinessRef.get()]);
+        if (!globalSnap.exists || ((_x = globalSnap.data()) === null || _x === void 0 ? void 0 : _x.businessId) !== businessId || !businessSnap.exists)
+            throw new https_1.HttpsError('not-found', 'Usuario no encontrado en este negocio.');
+        if (((_y = globalSnap.data()) === null || _y === void 0 ? void 0 : _y.role) === 'Administrador')
+            throw new https_1.HttpsError('failed-precondition', 'El Administrador principal tiene acceso general.');
+        if (branchId) {
+            const assignedCount = businessUsers.docs.filter(item => { var _a, _b, _c; return item.id !== userId && ((_a = item.data()) === null || _a === void 0 ? void 0 : _a.role) !== 'Administrador' && Array.isArray((_b = item.data()) === null || _b === void 0 ? void 0 : _b.branchIds) && ((_c = item.data()) === null || _c === void 0 ? void 0 : _c.branchIds.includes(branchId)); }).length;
+            if (assignedCount >= 2)
+                throw new https_1.HttpsError('failed-precondition', 'Esta sucursal ya tiene el máximo de 2 usuarios asignados.');
+        }
+        const nextIds = branchId ? [branchId] : [];
+        const batch = db.batch();
+        batch.update(targetGlobalRef, { branchIds: nextIds, updatedAt: now });
+        batch.update(targetBusinessRef, { branchIds: nextIds, updatedAt: now });
+        batch.set(db.collection(`businesses/${businessId}/audit_logs`).doc(), {
+            action: branchId ? 'SET_USER_BRANCH' : 'UNASSIGN_BRANCH_USER', module: 'branches',
+            userId: request.auth.uid, userName: email, role: profile === null || profile === void 0 ? void 0 : profile.role, targetId: userId,
+            targetName: ((_z = globalSnap.data()) === null || _z === void 0 ? void 0 : _z.displayName) || ((_0 = globalSnap.data()) === null || _0 === void 0 ? void 0 : _0.email) || userId,
+            businessId, after: { branchId: branchId || null, branchIds: nextIds }, createdAt: now,
+        });
+        await batch.commit();
+        return { success: true, userId, branchIds: nextIds };
+    }
+    if (action === 'saveSettings') {
+        const branchId = String(((_1 = request.data) === null || _1 === void 0 ? void 0 : _1.branchId) || '');
+        const incoming = (_2 = request.data) === null || _2 === void 0 ? void 0 : _2.settings;
         if (!branchId || branchId === 'main' || !incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
             throw new https_1.HttpsError('invalid-argument', 'Configuración de sucursal inválida.');
         }
         const branchSnap = await branchesRef.doc(branchId).get();
-        if (!branchSnap.exists || ((_w = branchSnap.data()) === null || _w === void 0 ? void 0 : _w.active) === false)
+        if (!branchSnap.exists || ((_3 = branchSnap.data()) === null || _3 === void 0 ? void 0 : _3.active) === false)
             throw new https_1.HttpsError('failed-precondition', 'La sucursal no está activa.');
         const blockedKeys = new Set(['businessId', 'branchId', 'createdAt', 'updatedAt', 'plan', 'active', 'ownerId']);
         const cleanSettings = {};
@@ -1137,17 +1179,17 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
         return { success: true, branchId };
     }
     if (action === 'transferStock') {
-        const itemType = String(((_x = request.data) === null || _x === void 0 ? void 0 : _x.itemType) || '');
-        const itemId = String(((_y = request.data) === null || _y === void 0 ? void 0 : _y.itemId) || '');
-        const sourceBranchId = String(((_z = request.data) === null || _z === void 0 ? void 0 : _z.sourceBranchId) || '');
-        const targetBranchId = String(((_0 = request.data) === null || _0 === void 0 ? void 0 : _0.targetBranchId) || '');
-        const quantity = Math.floor(Number(((_1 = request.data) === null || _1 === void 0 ? void 0 : _1.quantity) || 0));
+        const itemType = String(((_4 = request.data) === null || _4 === void 0 ? void 0 : _4.itemType) || '');
+        const itemId = String(((_5 = request.data) === null || _5 === void 0 ? void 0 : _5.itemId) || '');
+        const sourceBranchId = String(((_6 = request.data) === null || _6 === void 0 ? void 0 : _6.sourceBranchId) || '');
+        const targetBranchId = String(((_7 = request.data) === null || _7 === void 0 ? void 0 : _7.targetBranchId) || '');
+        const quantity = Math.floor(Number(((_8 = request.data) === null || _8 === void 0 ? void 0 : _8.quantity) || 0));
         if (!['product', 'liquid'].includes(itemType) || !itemId || !sourceBranchId || !targetBranchId || sourceBranchId === targetBranchId || quantity <= 0) {
             throw new https_1.HttpsError('invalid-argument', 'Datos de transferencia inválidos.');
         }
         if (targetBranchId !== 'main') {
             const targetBranch = await branchesRef.doc(targetBranchId).get();
-            if (!targetBranch.exists || ((_2 = targetBranch.data()) === null || _2 === void 0 ? void 0 : _2.active) === false)
+            if (!targetBranch.exists || ((_9 = targetBranch.data()) === null || _9 === void 0 ? void 0 : _9.active) === false)
                 throw new https_1.HttpsError('failed-precondition', 'La sucursal destino no está activa.');
         }
         const collectionName = itemType === 'product' ? 'products' : 'liquids';
@@ -1174,7 +1216,7 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
         const batch = db.batch();
         batch.update(sourceRef, { [stockField]: available - quantity, updatedAt: now });
         if (destinationMatch) {
-            batch.update(destinationRef, { [stockField]: (Number((_3 = destinationMatch.data()) === null || _3 === void 0 ? void 0 : _3[stockField]) || 0) + quantity, updatedAt: now });
+            batch.update(destinationRef, { [stockField]: (Number((_10 = destinationMatch.data()) === null || _10 === void 0 ? void 0 : _10[stockField]) || 0) + quantity, updatedAt: now });
         }
         else {
             const clone = Object.assign(Object.assign({}, source), { branchId: targetBranchId, [stockField]: quantity, createdAt: now, updatedAt: now });

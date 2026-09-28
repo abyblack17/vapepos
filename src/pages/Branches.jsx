@@ -6,13 +6,12 @@ import { useApp } from '../contexts/AppContext'
 const money = value => new Intl.NumberFormat('es-DO', { style: 'currency', currency: 'DOP', maximumFractionDigits: 0 }).format(value || 0)
 
 export default function Branches() {
-  const { state, dispatch } = useApp()
-  const { branches, selectedBranchId, selectBranch, createBranch, setBranchActive, assignUser, transferStock, canManageBranches, activeAdditionalCount, monthlyBranchCost } = useBranches()
+  const { state } = useApp()
+  const { branches, selectedBranchId, selectBranch, createBranch, setBranchActive, transferStock, canManageBranches, activeAdditionalCount, monthlyBranchCost } = useBranches()
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ name: '', address: '', phone: '' })
   const [transfer, setTransfer] = useState(null)
-  const employees = (state.users || []).filter(user => user.active !== false && user.role !== 'Administrador')
 
   const submit = async event => {
     event.preventDefault()
@@ -25,14 +24,6 @@ export default function Branches() {
       toast.success(`Sucursal “${created.name}” creada`)
     } catch (error) { toast.error(error.message) }
     finally { setSaving(false) }
-  }
-
-  const toggleUser = async (branchId, user, assigned) => {
-    try {
-      const result = await assignUser(branchId, user.id, assigned)
-      dispatch({ type: 'UPDATE_USER', payload: { ...user, branchIds: result.branchIds } })
-      toast.success(assigned ? 'Usuario asignado' : 'Usuario retirado de la sucursal')
-    } catch (error) { toast.error(error.message) }
   }
 
   const submitTransfer = async event => {
@@ -72,17 +63,6 @@ export default function Branches() {
           <span className={`text-xs px-2 py-1 rounded-full ${branch.active === false ? 'bg-red-500/10 text-red-400' : 'bg-[#00e5a0]/10 text-[#00e5a0]'}`}>{branch.active === false ? 'Suspendida' : 'Activa'}</span>
         </div>
         {(branch.address || branch.phone) && <div className="mt-3 text-xs text-slate-400 space-y-1">{branch.address && <div>📍 {branch.address}</div>}{branch.phone && <div>☎ {branch.phone}</div>}</div>}
-        <div className="mt-3 border-t border-white/5 pt-3">
-          <div className="text-xs font-semibold text-slate-400 mb-2">Usuarios asignados ({employees.filter(user => user.branchIds?.includes(branch.id)).length}/2)</div>
-          <div className="space-y-1.5">
-            {employees.map(user => {
-              const assigned = user.branchIds?.includes(branch.id) === true
-              const full = !assigned && employees.filter(item => item.branchIds?.includes(branch.id)).length >= 2
-              return <label key={user.id} className={`flex items-center gap-2 text-xs ${full ? 'opacity-40' : 'cursor-pointer'}`}><input type="checkbox" checked={assigned} disabled={full} onChange={event => toggleUser(branch.id, user, event.target.checked)} /><span className="text-slate-300">{user.name || user.displayName || user.email}</span><span className="text-slate-600">· {user.role}</span></label>
-            })}
-            {!employees.length && <div className="text-xs text-slate-600">No hay empleados para asignar.</div>}
-          </div>
-        </div>
         <div className="mt-4 flex gap-2">
           {branch.active !== false && <button className="btn-secondary flex-1" disabled={selectedBranchId === branch.id} onClick={() => selectBranch(branch.id)}>{selectedBranchId === branch.id ? 'Sucursal actual' : 'Entrar'}</button>}
           {canManageBranches && !branch.isMain && <button className="btn-secondary" onClick={async () => { try { await setBranchActive(branch.id, branch.active === false); toast.success(branch.active === false ? 'Sucursal activada' : 'Sucursal suspendida') } catch (error) { toast.error(error.message) } }}>{branch.active === false ? 'Activar' : 'Suspender'}</button>}
