@@ -181,7 +181,7 @@ export async function getBusinessSettings(businessId, branchId = null) {
 export async function saveBusinessSettings(businessId, settings, branchId = null) {
   try {
     if (branchId && branchId !== 'main') {
-      const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+      const fn = httpsCallable(getFunctions(), 'manageBranch')
       await fn({ action: 'saveSettings', branchId, settings })
       return true
     }

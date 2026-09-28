@@ -53,7 +53,7 @@ export default function Branches() {
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <div className="card p-4"><div className="text-xs text-slate-500">Locales activos</div><div className="text-2xl font-bold text-[#00e5a0] mt-1">{activeAdditionalCount + 1}</div><div className="text-xs text-slate-500">de {MAX_ADDITIONAL_BRANCHES + 1} máximo</div></div>
       <div className="card p-4"><div className="text-xs text-slate-500">Sucursales adicionales</div><div className="text-2xl font-bold text-[#00c4e8] mt-1">{activeAdditionalCount}</div><div className="text-xs text-slate-500">máximo {MAX_ADDITIONAL_BRANCHES}</div></div>
-      <div className="card p-4"><div className="text-xs text-slate-500">Cargo mensual adicional</div><div className="text-2xl font-bold text-[#f59e0b] mt-1">{money(monthlyBranchCost)}</div><div className="text-xs text-slate-500">prueba sin cobro automático</div></div>
+      <div className="card p-4"><div className="text-xs text-slate-500">Cargo mensual adicional</div><div className="text-2xl font-bold text-[#f59e0b] mt-1">{money(monthlyBranchCost)}</div><div className="text-xs text-slate-500">RD$300 por sucursal activa</div></div>
     </div>
 
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

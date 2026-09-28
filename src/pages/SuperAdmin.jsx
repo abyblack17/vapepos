@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { db, storage } from '../config/firebase'
+import { db } from '../config/firebase'
 import {
   collection, getDocs, query, orderBy as fbOrderBy,
-  updateDoc, deleteDoc, doc, addDoc, serverTimestamp, writeBatch,
+  updateDoc, deleteDoc, doc, addDoc, serverTimestamp,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { ref as storageRef, listAll, deleteObject } from 'firebase/storage'
 import { fmt } from '../utils/helpers'
 import toast from 'react-hot-toast'
 
@@ -19,12 +18,6 @@ const TYPE_COLORS = {
   consulta:   'text-[#00c4e8] bg-[#00c4e8]/10 border-[#00c4e8]/20',
 }
 const STATUS_BADGE = { nuevo: 'badge-red', leido: 'badge-blue', resuelto: 'badge-green' }
-
-const BUSINESS_SUBCOLLECTIONS = [
-  'products', 'liquids', 'customers', 'suppliers', 'sales', 'purchases',
-  'cash_sessions', 'settings', 'fiscalConfig', 'ncfSequences', 'fiscalInvoices',
-  'suggestions', 'upgrade_requests', 'audit_logs',
-]
 
 const toDateInputValue = (value) => {
   if (!value) return ''
@@ -239,35 +232,6 @@ export default function SuperAdmin() {
     setSavingPlanExpiry(false)
   }
 
-  const deleteCollectionDocs = async (colRef) => {
-    const snap = await getDocs(colRef)
-    let batch = writeBatch(db)
-    let count = 0
-    for (const d of snap.docs) {
-      batch.delete(d.ref)
-      count++
-      if (count >= 450) {
-        await batch.commit()
-        batch = writeBatch(db)
-        count = 0
-      }
-    }
-    if (count > 0) await batch.commit()
-  }
-
-  const deleteStorageFolder = async (path) => {
-    try {
-      const folderRef = storageRef(storage, path)
-      const res = await listAll(folderRef)
-      await Promise.all(res.items.map(item => deleteObject(item).catch(() => null)))
-      for (const prefix of res.prefixes) {
-        await deleteStorageFolder(prefix.fullPath)
-      }
-    } catch (err) {
-      console.warn('deleteStorageFolder:', err.message)
-    }
-  }
-
   const deleteBusinessPermanent = async (biz) => {
     const bizUsers = allUsers.filter(u => u.businessId === biz.id && u.role !== 'superadmin')
     const msg = `¿Eliminar PERMANENTEMENTE el negocio "${biz.name}"?\n\nSe borrarán sus datos de Firestore, archivos de Storage y ${bizUsers.length} usuario(s) relacionado(s).\n\nEscribe ELIMINAR para confirmar.`
@@ -276,24 +240,9 @@ export default function SuperAdmin() {
 
     setDeletingBizId(biz.id)
     try {
-      const fns = getFunctions()
-      const deleteUserFn = httpsCallable(fns, 'deleteUserAsSuperAdmin')
-
-      for (const colName of BUSINESS_SUBCOLLECTIONS) {
-        await deleteCollectionDocs(collection(db, 'businesses', biz.id, colName))
-      }
-
-      await deleteStorageFolder(`businesses/${biz.id}`)
-
-      for (const user of bizUsers) {
-        try {
-          await deleteUserFn({ targetUid: user.id })
-        } catch (err) {
-          console.warn('delete user failed:', user.email, err.message)
-        }
-      }
-
-      await deleteDoc(doc(db, 'businesses', biz.id))
+      const deleteBusinessFn = httpsCallable(getFunctions(), 'deleteBusinessAsSuperAdmin')
+      const result = await deleteBusinessFn({ businessId: biz.id, confirmation: confirmText })
+      if (!result.data?.success) throw new Error('El servidor no confirmó la eliminación.')
 
       setBusinesses(prev => prev.filter(b => b.id !== biz.id))
       setAllUsers(prev => prev.filter(u => u.businessId !== biz.id))
@@ -303,7 +252,9 @@ export default function SuperAdmin() {
         setSelectedBiz(null)
         setBizSales([])
       }
-      toast.success('Negocio eliminado completamente')
+      toast.success(result.data.storageDeleted === false
+        ? 'Negocio eliminado. Algunos archivos de Storage requieren revisión.'
+        : 'Negocio eliminado completamente')
     } catch (err) {
       toast.error('Error eliminando negocio: ' + err.message)
     }

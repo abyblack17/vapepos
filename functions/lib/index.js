@@ -33,16 +33,18 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.setBusinessAccessAsSuperAdmin = exports.manageTestBranch = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
+exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.setBusinessAccessAsSuperAdmin = exports.deleteBusinessAsSuperAdmin = exports.manageBranch = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
 const app_1 = require("firebase-admin/app");
 const auth_1 = require("firebase-admin/auth");
 const firestore_2 = require("firebase-admin/firestore");
+const storage_1 = require("firebase-admin/storage");
 const crypto = __importStar(require("crypto"));
-(0, app_1.initializeApp)();
+const adminApp = (0, app_1.initializeApp)();
 const db = (0, firestore_2.getFirestore)();
 const auth = (0, auth_1.getAuth)();
+const adminStorage = (0, storage_1.getStorage)(adminApp);
 async function setAccessClaims(uid, businessId, role, active) {
     const user = await auth.getUser(uid);
     await auth.setCustomUserClaims(uid, Object.assign(Object.assign({}, (user.customClaims || {})), { vapePosBusinessId: businessId, vapePosRole: role, vapePosActive: active }));
@@ -1021,9 +1023,9 @@ exports.activateTrial = (0, https_1.onCall)({ region: 'us-central1', enforceAppC
     return { success: true, expiresAt: expiresAt.toISOString() };
 });
 // ══════════════════════════════════════════════════════════════
-// Sucursales beta: exclusivamente cuenta Tests
+// Gestión de sucursales para todos los negocios
 // ══════════════════════════════════════════════════════════════
-exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
+exports.manageBranch = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10;
     if (!request.auth)
         throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
@@ -1035,15 +1037,7 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
     }
     const email = String(request.auth.token.email || '').trim().toLowerCase();
     const branchesRef = db.collection(`businesses/${businessId}/branches`);
-    const [businessUsers, existingBranches] = await Promise.all([
-        db.collection(`businesses/${businessId}/users`).get(),
-        branchesRef.limit(1).get(),
-    ]);
-    const isTestBusiness = email === 'test01@gmail.com'
-        || !existingBranches.empty
-        || businessUsers.docs.some(item => { var _a; return String(((_a = item.data()) === null || _a === void 0 ? void 0 : _a.email) || '').trim().toLowerCase() === 'test01@gmail.com'; });
-    if (!isTestBusiness)
-        throw new https_1.HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para el negocio Tests.');
+    const businessUsers = await db.collection(`businesses/${businessId}/users`).get();
     const canManage = (profile === null || profile === void 0 ? void 0 : profile.role) === 'Administrador' || ((profile === null || profile === void 0 ? void 0 : profile.role) === 'Encargado' && ((_a = profile === null || profile === void 0 ? void 0 : profile.permissions) === null || _a === void 0 ? void 0 : _a.branches) === true);
     if (!canManage)
         throw new https_1.HttpsError('permission-denied', 'No tienes permiso para administrar sucursales.');
@@ -1244,6 +1238,61 @@ exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceA
         return { success: true, transferId: transferRef.id, destinationItemId: destinationRef.id };
     }
     throw new https_1.HttpsError('invalid-argument', 'Acción de sucursal no válida.');
+});
+// ══════════════════════════════════════════════════════════════
+// SuperAdmin: eliminar negocio completo desde el servidor
+// ══════════════════════════════════════════════════════════════
+exports.deleteBusinessAsSuperAdmin = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true, timeoutSeconds: 540, memory: '512MiB' }, async (request) => {
+    var _a, _b, _c, _d, _e;
+    if (!request.auth)
+        throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
+    const caller = await db.doc(`users/${request.auth.uid}`).get();
+    if (!caller.exists || ((_a = caller.data()) === null || _a === void 0 ? void 0 : _a.active) !== true || ((_b = caller.data()) === null || _b === void 0 ? void 0 : _b.role) !== 'superadmin') {
+        throw new https_1.HttpsError('permission-denied', 'Solo el super admin puede eliminar negocios.');
+    }
+    const businessId = String(((_c = request.data) === null || _c === void 0 ? void 0 : _c.businessId) || '').trim();
+    const confirmation = String(((_d = request.data) === null || _d === void 0 ? void 0 : _d.confirmation) || '');
+    if (!businessId || confirmation !== 'ELIMINAR')
+        throw new https_1.HttpsError('invalid-argument', 'Confirmación inválida.');
+    const businessRef = db.doc(`businesses/${businessId}`);
+    const businessSnap = await businessRef.get();
+    if (!businessSnap.exists)
+        throw new https_1.HttpsError('not-found', 'Negocio no encontrado.');
+    const usersSnap = await db.collection('users').where('businessId', '==', businessId).get();
+    const userIds = usersSnap.docs.map(item => item.id).filter(uid => { var _a; return uid !== ((_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid); });
+    for (let index = 0; index < userIds.length; index += 1000) {
+        await auth.deleteUsers(userIds.slice(index, index + 1000));
+    }
+    for (let index = 0; index < usersSnap.docs.length; index += 450) {
+        const batch = db.batch();
+        for (const userDoc of usersSnap.docs.slice(index, index + 450))
+            batch.delete(userDoc.ref);
+        await batch.commit();
+    }
+    const directorySnap = await db.collection('providers_directory').where('businessId', '==', businessId).get();
+    if (!directorySnap.empty) {
+        const batch = db.batch();
+        directorySnap.docs.forEach(item => batch.delete(item.ref));
+        await batch.commit();
+    }
+    await db.recursiveDelete(businessRef);
+    let storageDeleted = true;
+    try {
+        await adminStorage.bucket().deleteFiles({ prefix: `businesses/${businessId}/` });
+    }
+    catch (error) {
+        storageDeleted = false;
+        console.warn('No se pudieron eliminar todos los archivos del negocio:', error);
+    }
+    await db.collection('system_audit_logs').add({
+        action: 'DELETE_BUSINESS', businessId,
+        businessName: ((_e = businessSnap.data()) === null || _e === void 0 ? void 0 : _e.name) || businessId,
+        deletedUsers: userIds.length, storageDeleted,
+        superAdminId: request.auth.uid,
+        superAdminEmail: request.auth.token.email || '',
+        createdAt: firestore_2.FieldValue.serverTimestamp(),
+    });
+    return { success: true, businessId, deletedUsers: userIds.length, storageDeleted };
 });
 // ══════════════════════════════════════════════════════════════
 // SuperAdmin: activar, suspender o rechazar un negocio completo

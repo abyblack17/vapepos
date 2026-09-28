@@ -3,11 +3,13 @@ import { onDocumentDeleted } from 'firebase-functions/v2/firestore'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth, UpdateRequest } from 'firebase-admin/auth'
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore'
+import { getStorage } from 'firebase-admin/storage'
 import * as crypto from 'crypto'
 
-initializeApp()
+const adminApp = initializeApp()
 const db = getFirestore()
 const auth = getAuth()
+const adminStorage = getStorage(adminApp)
 
 async function setAccessClaims(uid: string, businessId: string | null, role: string, active: boolean) {
   const user = await auth.getUser(uid)
@@ -1121,9 +1123,9 @@ export const activateTrial = onCall(
 )
 
 // ══════════════════════════════════════════════════════════════
-// Sucursales beta: exclusivamente cuenta Tests
+// Gestión de sucursales para todos los negocios
 // ══════════════════════════════════════════════════════════════
-export const manageTestBranch = onCall(
+export const manageBranch = onCall(
   { region: 'us-central1', enforceAppCheck: true },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
@@ -1136,14 +1138,7 @@ export const manageTestBranch = onCall(
 
     const email = String(request.auth.token.email || '').trim().toLowerCase()
     const branchesRef = db.collection(`businesses/${businessId}/branches`)
-    const [businessUsers, existingBranches] = await Promise.all([
-      db.collection(`businesses/${businessId}/users`).get(),
-      branchesRef.limit(1).get(),
-    ])
-    const isTestBusiness = email === 'test01@gmail.com'
-      || !existingBranches.empty
-      || businessUsers.docs.some(item => String(item.data()?.email || '').trim().toLowerCase() === 'test01@gmail.com')
-    if (!isTestBusiness) throw new HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para el negocio Tests.')
+    const businessUsers = await db.collection(`businesses/${businessId}/users`).get()
     const canManage = profile?.role === 'Administrador' || (profile?.role === 'Encargado' && profile?.permissions?.branches === true)
     if (!canManage) throw new HttpsError('permission-denied', 'No tienes permiso para administrar sucursales.')
     const action = String(request.data?.action || '')
@@ -1333,6 +1328,67 @@ export const manageTestBranch = onCall(
     }
 
     throw new HttpsError('invalid-argument', 'Acción de sucursal no válida.')
+  }
+)
+
+// ══════════════════════════════════════════════════════════════
+// SuperAdmin: eliminar negocio completo desde el servidor
+// ══════════════════════════════════════════════════════════════
+export const deleteBusinessAsSuperAdmin = onCall(
+  { region: 'us-central1', enforceAppCheck: true, timeoutSeconds: 540, memory: '512MiB' },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
+    const caller = await db.doc(`users/${request.auth.uid}`).get()
+    if (!caller.exists || caller.data()?.active !== true || caller.data()?.role !== 'superadmin') {
+      throw new HttpsError('permission-denied', 'Solo el super admin puede eliminar negocios.')
+    }
+
+    const businessId = String(request.data?.businessId || '').trim()
+    const confirmation = String(request.data?.confirmation || '')
+    if (!businessId || confirmation !== 'ELIMINAR') throw new HttpsError('invalid-argument', 'Confirmación inválida.')
+    const businessRef = db.doc(`businesses/${businessId}`)
+    const businessSnap = await businessRef.get()
+    if (!businessSnap.exists) throw new HttpsError('not-found', 'Negocio no encontrado.')
+
+    const usersSnap = await db.collection('users').where('businessId', '==', businessId).get()
+    const userIds = usersSnap.docs.map(item => item.id).filter(uid => uid !== request.auth?.uid)
+    for (let index = 0; index < userIds.length; index += 1000) {
+      await auth.deleteUsers(userIds.slice(index, index + 1000))
+    }
+
+    for (let index = 0; index < usersSnap.docs.length; index += 450) {
+      const batch = db.batch()
+      for (const userDoc of usersSnap.docs.slice(index, index + 450)) batch.delete(userDoc.ref)
+      await batch.commit()
+    }
+
+    const directorySnap = await db.collection('providers_directory').where('businessId', '==', businessId).get()
+    if (!directorySnap.empty) {
+      const batch = db.batch()
+      directorySnap.docs.forEach(item => batch.delete(item.ref))
+      await batch.commit()
+    }
+
+    await db.recursiveDelete(businessRef)
+
+    let storageDeleted = true
+    try {
+      await adminStorage.bucket().deleteFiles({ prefix: `businesses/${businessId}/` })
+    } catch (error) {
+      storageDeleted = false
+      console.warn('No se pudieron eliminar todos los archivos del negocio:', error)
+    }
+
+    await db.collection('system_audit_logs').add({
+      action: 'DELETE_BUSINESS', businessId,
+      businessName: businessSnap.data()?.name || businessId,
+      deletedUsers: userIds.length, storageDeleted,
+      superAdminId: request.auth.uid,
+      superAdminEmail: request.auth.token.email || '',
+      createdAt: FieldValue.serverTimestamp(),
+    })
+
+    return { success: true, businessId, deletedUsers: userIds.length, storageDeleted }
   }
 )
 

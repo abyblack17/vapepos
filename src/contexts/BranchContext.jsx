@@ -5,7 +5,6 @@ import { db } from '../config/firebase'
 import { useAuth } from './AuthContext'
 
 const BranchContext = createContext(null)
-const TEST_OWNER_EMAIL = 'test01@gmail.com'
 export const MAX_ADDITIONAL_BRANCHES = 5
 export const BRANCH_MONTHLY_PRICE = 300
 
@@ -21,9 +20,8 @@ export function BranchProvider({ children }) {
   const storageKey = businessId ? `vapepos_branch_${businessId}` : 'vapepos_branch'
   const [selectedBranchId, setSelectedBranchIdState] = useState('main')
 
-  const testOwner = currentUser?.email?.toLowerCase() === TEST_OWNER_EMAIL
-  const branchesEnabled = testOwner || storedBranches.length > 0
   const canManageBranches = currentUser?.role === 'Administrador' || (currentUser?.role === 'Encargado' && currentUser?.permissions?.branches === true)
+  const branchesEnabled = canManageBranches || storedBranches.length > 0
   const allBranches = useMemo(() => {
     const hasMain = storedBranches.some(branch => branch.id === 'main' || branch.isMain)
     return hasMain ? storedBranches : [mainBranch, ...storedBranches]
@@ -73,7 +71,7 @@ export function BranchProvider({ children }) {
     if (additional >= MAX_ADDITIONAL_BRANCHES) throw new Error('El negocio ya alcanzó el máximo de 5 sucursales adicionales.')
     const cleanName = String(name || '').trim()
     if (!cleanName) throw new Error('Escribe el nombre de la sucursal.')
-    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const fn = httpsCallable(getFunctions(), 'manageBranch')
     const result = await fn({ action: 'create', name: cleanName, address, phone })
     const created = result.data?.branch
     if (!created?.id) throw new Error('No se pudo crear la sucursal.')
@@ -85,7 +83,7 @@ export function BranchProvider({ children }) {
     if (!canManageBranches) throw new Error('No tienes permiso para administrar sucursales.')
     const branch = storedBranches.find(item => item.id === branchId)
     if (!branch || branch.isMain) throw new Error('La sucursal principal no puede suspenderse.')
-    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const fn = httpsCallable(getFunctions(), 'manageBranch')
     await fn({ action: 'setActive', branchId, active })
     setStoredBranches(current => current.map(item => item.id === branchId ? { ...item, active } : item))
     if (!active && selectedBranchId === branchId) selectBranch('main')
@@ -93,21 +91,21 @@ export function BranchProvider({ children }) {
 
   const assignUser = async (branchId, userId, assigned) => {
     if (!canManageBranches) throw new Error('No tienes permiso para asignar usuarios.')
-    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const fn = httpsCallable(getFunctions(), 'manageBranch')
     const result = await fn({ action: 'assignUser', branchId, userId, assigned })
     return result.data
   }
 
   const setUserBranch = async (userId, branchId) => {
     if (currentUser?.role !== 'Administrador') throw new Error('Solo el Administrador principal puede asignar empleados.')
-    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const fn = httpsCallable(getFunctions(), 'manageBranch')
     const result = await fn({ action: 'setUserBranch', userId, branchId })
     return result.data
   }
 
   const transferStock = async ({ itemType, itemId, sourceBranchId, targetBranchId, quantity }) => {
     if (!canManageBranches) throw new Error('No tienes permiso para transferir inventario.')
-    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const fn = httpsCallable(getFunctions(), 'manageBranch')
     const result = await fn({ action: 'transferStock', itemType, itemId, sourceBranchId, targetBranchId, quantity })
     return result.data
   }
