@@ -760,7 +760,7 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
           />
           <span>
             <span className="block text-sm font-semibold text-slate-300">ITBIS incluido en los precios de venta</span>
-            <span className="block text-xs text-slate-500 mt-0.5">{Number(state.settings?.taxRate ?? 18) > 0 ? `Aplica al frasco y a las recargas: el precio mostrado ya contiene el ${state.settings?.taxRate ?? 18}% de ITBIS.` : 'El negocio está configurado sin ITBIS; esta opción no modifica el precio.'}</span>
+            <span className="block text-xs text-slate-500 mt-0.5">Cuando el negocio usa ITBIS, indica que el precio del frasco y las recargas ya contiene el impuesto. Con la opción Sin ITBIS no modifica el precio.</span>
           </span>
         </label>
         <div className="form-row">
