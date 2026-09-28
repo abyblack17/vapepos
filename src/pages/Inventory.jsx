@@ -58,6 +58,7 @@ export default function Inventory() {
 
     const productData = {
       ...data,
+      ...(state.branchId ? { branchId: state.branchId } : {}),
       name,
       sku: data.sku?.trim() || makeProductSku(state.products),
       price: parseFloat(data.price) || 0,
@@ -124,6 +125,7 @@ export default function Inventory() {
         name: row.name.trim(),
         sku: row.sku?.trim() || existing?.sku || makeProductSku(working),
         active: row.active !== false,
+        ...(state.branchId ? { branchId: state.branchId } : {}),
       }
       dispatch({ type: existing ? 'UPDATE_PRODUCT' : 'ADD_PRODUCT', payload })
       const pos = working.findIndex(p => p.id === id)

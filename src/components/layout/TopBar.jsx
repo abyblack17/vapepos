@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../contexts/AppContext'
 import { usePlan } from '../../hooks/usePlan'
+import { useBranches } from '../../contexts/BranchContext'
 
 const PAGE_TITLES = {
   dashboard:   'Dashboard',
@@ -17,11 +18,13 @@ const PAGE_TITLES = {
   users:       'Usuarios',
   settings:    'Configuracion',
   suggestions: 'Sugerencias',
+  branches:    'Sucursales',
 }
 
 export default function TopBar({ currentPage, onMenuClick }) {
   const { state } = useApp()
   const { inGrace, daysLeft, isPro } = usePlan()
+  const { branchesEnabled, branches, selectedBranchId, selectBranch } = useBranches()
   const [time, setTime] = useState(new Date())
 
   useEffect(() => {
@@ -70,6 +73,17 @@ export default function TopBar({ currentPage, onMenuClick }) {
         </div>
 
         <div className="flex-1" />
+
+        {branchesEnabled && (
+          <select
+            aria-label="Sucursal actual"
+            className="select !w-auto max-w-[155px] md:max-w-[210px] !py-1.5 !text-xs"
+            value={selectedBranchId}
+            onChange={event => selectBranch(event.target.value)}
+          >
+            {branches.filter(branch => branch.active !== false).map(branch => <option key={branch.id} value={branch.id}>{branch.isMain ? '🏪 ' : '📍 '}{branch.name}</option>)}
+          </select>
+        )}
 
         {/* Cash status */}
         <div className={`flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0 ${

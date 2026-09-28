@@ -4,6 +4,7 @@ import { useAuth } from './AuthContext'
 import { bizGetAll, getBusinessSettings } from '../services/firestoreService'
 import { useFirestoreSync } from '../hooks/useFirestoreSync'
 import { DEFAULT_REFILL_BUTTONS } from '../services/liquidService'
+import { useBranches } from './BranchContext'
 
 // ── Estado inicial vacío ──────────────────────────────────────
 function getInitialState() {
@@ -468,6 +469,7 @@ const NO_SYNC_ACTIONS = new Set([
 
 export function AppProvider({ children }) {
   const { businessId, currentUser } = useAuth()
+  const { branchesEnabled, selectedBranchId, selectedBranch } = useBranches()
   const syncRef = useRef(null)
 
   // Wrapper reducer que captura el estado nuevo para el sync
@@ -475,7 +477,7 @@ export function AppProvider({ children }) {
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const sync = useFirestoreSync(businessId)
+  const sync = useFirestoreSync(businessId, branchesEnabled ? selectedBranchId : null)
 
   // dispatch sincronizador
   // Calculamos el nuevo estado manualmente ANTES de llamar sync
@@ -521,11 +523,19 @@ export function AppProvider({ children }) {
           bizGetAll(businessId, 'fiscalInvoices', [orderBy('createdAt', 'desc')]),
         ])
 
-        // Caja: buscar sesion abierta activa
-        const openSession = cashSessions.find(s => s.open === true) || null
+        const matchesBranch = item => !branchesEnabled || (selectedBranchId === 'main' ? !item.branchId || item.branchId === 'main' : item.branchId === selectedBranchId)
+        const branchProducts = products.filter(matchesBranch)
+        const branchLiquids = liquids.filter(matchesBranch)
+        const branchSales = sales.filter(matchesBranch)
+        const branchPurchases = purchases.filter(matchesBranch)
+        const branchCashSessions = cashSessions.filter(matchesBranch)
+        const branchFiscalInvoices = fiscalInvoices.filter(matchesBranch)
+
+        // Caja: buscar sesion abierta activa de la sucursal
+        const openSession = branchCashSessions.find(s => s.open === true) || null
 
         // Calcular saleCounter desde las ventas existentes
-        const maxCounter = sales.reduce((max, s) => {
+        const maxCounter = branchSales.reduce((max, s) => {
           const num = parseInt(s.saleNumber?.split('-').pop() || '0')
           return num > max ? num : max
         }, 0)
@@ -533,13 +543,13 @@ export function AppProvider({ children }) {
         rawDispatch({
           type: 'LOAD_ALL',
           payload: {
-            products, liquids, customers: recalculateCustomerLoyalty(customers, sales), suppliers, sales, users, purchases,
+            products: branchProducts, liquids: branchLiquids, customers: recalculateCustomerLoyalty(customers, sales), suppliers, sales: branchSales, users, purchases: branchPurchases,
             fiscalConfig: fiscalConfigRows.find(f => f.id === 'config') || null,
-            ncfSequences, fiscalInvoices,
+            ncfSequences, fiscalInvoices: branchFiscalInvoices,
             settings: settings || stateRef.current.settings,
             saleCounter: maxCounter,
             cashSession:  openSession || stateRef.current.cashSession,
-        cashSessions: cashSessions,
+            cashSessions: branchCashSessions,
           },
         })
       } catch (err) {
@@ -549,7 +559,11 @@ export function AppProvider({ children }) {
     }
 
     loadAll()
-  }, [businessId])
+  }, [businessId, branchesEnabled, selectedBranchId])
+
+  useEffect(() => {
+    rawDispatch({ type: 'CLEAR_CART' })
+  }, [selectedBranchId])
 
   // Alertas reactivas
   const alerts = []
@@ -572,7 +586,7 @@ export function AppProvider({ children }) {
 
   return (
     <AppContext.Provider value={{
-      state: { ...state, alerts, currentUser: currentUser || state.currentUser, businessId },
+      state: { ...state, alerts, currentUser: currentUser || state.currentUser, businessId, branchesEnabled, branchId: branchesEnabled ? selectedBranchId : null, selectedBranch },
       dispatch,
     }}>
       {children}

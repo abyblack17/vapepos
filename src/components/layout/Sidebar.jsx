@@ -5,6 +5,7 @@ import { canDo } from '../../utils/helpers'
 import { usePlan } from '../../hooks/usePlan'
 import UpgradeModal from '../ui/UpgradeModal'
 import { APP_VERSION } from '../../version'
+import { useBranches } from '../../contexts/BranchContext'
 
 const NAV_ITEMS = [
   { id: 'dashboard',   icon: '◈',  label: 'Dashboard'     },
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { id: 'fiscal',      icon: '▣',  label: 'Fiscal / NCF'  },
   { id: 'cash',        icon: '◎',  label: 'Caja'          },
   { id: 'users',       icon: '⊙',  label: 'Usuarios'      },
+  { id: 'branches',    icon: '⌘',  label: 'Sucursales'    },
   { id: 'settings',    icon: '◈',  label: 'Configuracion' },
   { id: 'suggestions', icon: '💬', label: 'Sugerencias'   },
 ]
@@ -39,6 +41,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
   const { business }   = useAuth()
   const { hasFeature, isPro, daysLeft, inGrace, isTrial } = usePlan()
   const { currentUser, alerts } = state
+  const { branchesEnabled } = useBranches()
   const role = currentUser?.role || 'Cajero'
   const [showUpgrade, setShowUpgrade] = useState(false)
   const [showPlanInfo, setShowPlanInfo] = useState(false)
@@ -98,6 +101,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-0.5">
         {NAV_ITEMS.map(item => {
+          if (item.id === 'branches' && (!branchesEnabled || role !== 'Administrador')) return null
           const permKey   = PAGE_PERMISSION[item.id] || item.id
           const isProItem = PRO_ITEMS.includes(item.id)
 

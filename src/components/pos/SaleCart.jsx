@@ -348,6 +348,7 @@ export default function SaleCart({ onSaleComplete }) {
 
     const sale = {
       id:           saleId,
+      ...(state.branchId ? { branchId: state.branchId } : {}),
       saleNumber,
       date:         now.toISOString().split('T')[0],
       time:         now.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }),
@@ -383,6 +384,7 @@ export default function SaleCart({ onSaleComplete }) {
 
     const fiscalInvoice = fiscalData ? {
       id: sale.id, saleId: sale.id, saleNumber: sale.saleNumber, date: sale.date, time: sale.time,
+      ...(state.branchId ? { branchId: state.branchId } : {}),
       ncf: fiscalData.ncf, typeCode: fiscalData.typeCode, typeLabel: fiscalData.typeLabel,
       customerName: fiscalData.customer.name, customerRnc: fiscalData.customer.rnc,
       subtotal, tax, discountTotal, total, payment: selectedPayment, user: sale.user, userId: sale.userId,

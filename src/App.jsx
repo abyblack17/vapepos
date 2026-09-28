@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext'
 import { AppProvider } from './contexts/AppContext'
+import { BranchProvider } from './contexts/BranchContext'
 import Sidebar from './components/layout/Sidebar'
 import TopBar from './components/layout/TopBar'
 import { useApp } from './contexts/AppContext'
@@ -24,6 +25,7 @@ import Settings from './pages/Settings'
 import Fiscal from './pages/Fiscal'
 import Suggestions from './pages/Suggestions'
 import Insights from './pages/Insights'
+import Branches from './pages/Branches'
 import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
 import SuperAdmin from './pages/SuperAdmin'
@@ -54,6 +56,7 @@ const PAGE_COMPONENTS = {
   fiscal:      Fiscal,
   suggestions: Suggestions,
   insights:    Insights,
+  branches:    Branches,
 }
 
 function AppShell() {
@@ -147,9 +150,11 @@ function AuthGate() {
   }
 
   return (
-    <AppProvider>
-      <AppShell />
-    </AppProvider>
+    <BranchProvider>
+      <AppProvider>
+        <AppShell />
+      </AppProvider>
+    </BranchProvider>
   )
 }
 

@@ -88,6 +88,7 @@ export default function Refills() {
     const netUnitPrice = taxIncluded && rate > 0 ? price / (1 + rate) : price
     const sale = {
       id:          `s_${state.currentUser?.id || 'user'}_${Date.now()}_${genId('sale')}`,
+      ...(state.branchId ? { branchId: state.branchId } : {}),
       date:        new Date().toISOString().split('T')[0],
       time:        new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }),
       user:        state.currentUser?.name || 'Admin',
@@ -121,6 +122,7 @@ export default function Refills() {
     }
 
     const liquidData = {
+      ...(state.branchId ? { branchId: state.branchId } : {}),
       ...data,
       name,
       sku:                    data.sku?.trim() || makeLiquidCode(liquids),

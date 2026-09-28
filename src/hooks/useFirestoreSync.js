@@ -15,7 +15,7 @@ import {
   saveBusinessSettings, serverTimestamp,
 } from '../services/firestoreService'
 
-export function useFirestoreSync(businessId) {
+export function useFirestoreSync(businessId, branchId = null) {
 
   const sync = useCallback(async (action, newState) => {
     if (!businessId) return
@@ -29,7 +29,7 @@ export function useFirestoreSync(businessId) {
         case 'ADD_PRODUCT': {
           // Nuevo producto: usar bizSet con el id local generado
           const { id, ...data } = action.payload
-          await bizSet(businessId, 'products', id, { ...data, active: true })
+          await bizSet(businessId, 'products', id, { ...data, active: true, ...(branchId ? { branchId } : {}) })
           break
         }
         case 'UPDATE_PRODUCT': {
@@ -59,7 +59,7 @@ export function useFirestoreSync(businessId) {
         // ════════════════════════════════════════════════════
         case 'ADD_LIQUID': {
           const { id, ...data } = action.payload
-          await bizSet(businessId, 'liquids', id, data)
+          await bizSet(businessId, 'liquids', id, { ...data, ...(branchId ? { branchId } : {}) })
           break
         }
         case 'EDIT_LIQUID':
@@ -125,7 +125,7 @@ export function useFirestoreSync(businessId) {
           if (sale) {
             const { id, ...saleData } = sale
             await bizSet(businessId, 'sales', id, {
-              ...saleData,
+              ...saleData, ...(branchId ? { branchId } : {}),
               createdAt: serverTimestamp(),
             })
           }
@@ -209,7 +209,7 @@ export function useFirestoreSync(businessId) {
         case 'ADD_FISCAL_INVOICE': {
           const { id, ...data } = action.payload
           await bizSet(businessId, 'fiscalInvoices', id, {
-            ...data,
+            ...data, ...(branchId ? { branchId } : {}),
             createdAt: serverTimestamp(),
           })
           break
@@ -254,7 +254,7 @@ export function useFirestoreSync(businessId) {
         // ════════════════════════════════════════════════════
         case 'OPEN_CASH': {
           const sessionData = {
-            ...action.payload,
+            ...action.payload, ...(branchId ? { branchId } : {}),
             open:        true,
             sales:       0,
             expenses:    0,
@@ -335,7 +335,7 @@ export function useFirestoreSync(businessId) {
         // ════════════════════════════════════════════════════
         case 'ADD_PURCHASE': {
           const { id, ...data } = action.payload
-          await bizSet(businessId, 'purchases', id, data)
+          await bizSet(businessId, 'purchases', id, { ...data, ...(branchId ? { branchId } : {}) })
           break
         }
 
@@ -352,7 +352,7 @@ export function useFirestoreSync(businessId) {
     } catch (err) {
       console.error(`[FirestoreSync] Error en ${action.type}:`, err.message)
     }
-  }, [businessId])
+  }, [businessId, branchId])
 
   return sync
 }
