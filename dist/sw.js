@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vapepos-v1.5-pwa-fullscreen'
+const CACHE_NAME = 'vapepos-v2.7-branches-beta'
 
 const STATIC_ASSETS = [
   '/',
