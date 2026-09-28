@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vapepos-v2.7-branches-beta'
+const CACHE_NAME = 'vapepos-v2.8-branches-complete'
 
 const STATIC_ASSETS = [
   '/',
@@ -58,6 +58,22 @@ self.addEventListener('fetch', (event) => {
           return response
         })
         .catch(() => caches.match('/index.html'))
+    )
+    return
+  }
+
+  // Código y estilos — red primero para recibir cada deploy inmediatamente.
+  if (event.request.destination === 'script' || event.request.destination === 'style') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone))
+          }
+          return response
+        })
+        .catch(() => caches.match(event.request))
     )
     return
   }
