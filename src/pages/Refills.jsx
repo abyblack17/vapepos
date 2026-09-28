@@ -667,7 +667,7 @@ function SellBottleModal({ liquid, onClose, onSell, settings }) {
         <div className="bg-[#101c35] rounded-xl p-4 space-y-2 text-sm">
           <div className="flex justify-between text-slate-400"><span>Precio por frasco</span><span className="font-mono">{fmt(price)}</span></div>
           <div className="flex justify-between text-slate-400"><span>Cantidad × {qty}</span><span className="font-mono">{fmt(price * qty)}</span></div>
-          <div className="flex justify-between text-slate-400"><span>ITBIS ({taxRate}%)</span><span className="font-mono">{fmt(tax)}</span></div>
+          {taxRate > 0 && <div className="flex justify-between text-slate-400"><span>ITBIS ({taxRate}%)</span><span className="font-mono">{fmt(tax)}</span></div>}
           <div className="border-t border-white/10 pt-2 flex justify-between font-bold text-slate-100">
             <span>Total</span><span className="font-mono text-[#00e5a0] text-base">{fmt(total)}</span>
           </div>
@@ -760,7 +760,7 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
           />
           <span>
             <span className="block text-sm font-semibold text-slate-300">ITBIS incluido en los precios de venta</span>
-            <span className="block text-xs text-slate-500 mt-0.5">Aplica al frasco y a las recargas: el precio mostrado ya contiene el 18% de ITBIS.</span>
+            <span className="block text-xs text-slate-500 mt-0.5">{Number(state.settings?.taxRate ?? 18) > 0 ? `Aplica al frasco y a las recargas: el precio mostrado ya contiene el ${state.settings?.taxRate ?? 18}% de ITBIS.` : 'El negocio está configurado sin ITBIS; esta opción no modifica el precio.'}</span>
           </span>
         </label>
         <div className="form-row">

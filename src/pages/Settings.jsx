@@ -375,7 +375,14 @@ export default function Settings() {
               <option>RD$</option><option>USD</option>
             </select>
           </div>
-          <div><label className="label">ITBIS / Impuesto (%)</label><input className="input" type="number" value={settings.taxRate || 18} onChange={e => set('taxRate', parseFloat(e.target.value))} /></div>
+          <div>
+            <label className="label">ITBIS / Impuesto</label>
+            <select className="select" value={settings.taxRate ?? 18} onChange={e => set('taxRate', Number(e.target.value))}>
+              <option value={18}>ITBIS 18%</option>
+              <option value={0}>Sin ITBIS (0%)</option>
+            </select>
+            <div className="text-xs text-slate-500 mt-1">Se aplicará a todas las ventas nuevas del negocio.</div>
+          </div>
         </div>
         <button className="btn-primary mt-4 text-sm" onClick={() => handleSave('negocio')}>Guardar</button>
       </div>
@@ -592,8 +599,8 @@ export default function Settings() {
             <div className="flex justify-between"><span>Articulo x1</span><span>RD$100</span></div>
             <div className="flex justify-between"><span>Articulo x2</span><span>RD$200</span></div>
             <div className="border-t border-dashed border-gray-400 my-1" />
-            {settings.printTax !== false && <div className="flex justify-between text-gray-600"><span>ITBIS 18%</span><span>RD$54</span></div>}
-            <div className="flex justify-between font-bold"><span>TOTAL</span><span>RD$354</span></div>
+            {settings.printTax !== false && Number(settings.taxRate ?? 18) > 0 && <div className="flex justify-between text-gray-600"><span>ITBIS {settings.taxRate ?? 18}%</span><span>RD$54</span></div>}
+            <div className="flex justify-between font-bold"><span>TOTAL</span><span>{Number(settings.taxRate ?? 18) > 0 ? 'RD$354' : 'RD$300'}</span></div>
             <div className="border-t border-dashed border-gray-400 my-1" />
             <div className="text-center text-xs text-gray-500">{settings.invoiceFooter || '¡Gracias!'}</div>
           </div>

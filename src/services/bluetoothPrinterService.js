@@ -121,7 +121,7 @@ export function buildEscPosTicketText(sale, settings = {}) {
   lines.push(line('-', width))
   lines.push(leftRight('Subtotal', money(sale.subtotal), width))
   if (sale.discountTotal > 0) lines.push(leftRight('Descuento', `-${money(sale.discountTotal)}`, width))
-  if (settings.printTax !== false && sale.tax > 0) lines.push(leftRight(`ITBIS ${settings.taxRate || 18}%`, money(sale.tax), width))
+  if (settings.printTax !== false && sale.tax > 0) lines.push(leftRight(`ITBIS ${settings.taxRate ?? 18}%`, money(sale.tax), width))
   lines.push(line('-', width))
   lines.push(leftRight('TOTAL', money(sale.total), width))
   lines.push(leftRight('Pago', sale.payment || '', width))

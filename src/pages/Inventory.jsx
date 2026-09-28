@@ -411,7 +411,7 @@ function ProductModal({ data, suppliers, onClose, onSave, saving = false }) {
           />
           <span>
             <span className="block text-sm font-semibold text-slate-300">ITBIS incluido en el precio de venta</span>
-            <span className="block text-xs text-slate-500 mt-0.5">Al marcarlo, el precio escrito ya contiene el 18% de ITBIS y no se le sumará de nuevo al cobrar.</span>
+            <span className="block text-xs text-slate-500 mt-0.5">{Number(state.settings?.taxRate ?? 18) > 0 ? `Al marcarlo, el precio escrito ya contiene el ${state.settings?.taxRate ?? 18}% de ITBIS y no se le sumará de nuevo al cobrar.` : 'El negocio está configurado sin ITBIS; esta opción no modifica el precio.'}</span>
           </span>
         </label>
         <div className="form-row">
