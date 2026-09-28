@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { addDoc, collection, doc, getDocs, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { collection, getDocs, orderBy, query } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../config/firebase'
 import { useAuth } from './AuthContext'
 
@@ -66,14 +67,10 @@ export function BranchProvider({ children }) {
     if (additional >= MAX_ADDITIONAL_BRANCHES) throw new Error('El negocio ya alcanzó el máximo de 5 sucursales adicionales.')
     const cleanName = String(name || '').trim()
     if (!cleanName) throw new Error('Escribe el nombre de la sucursal.')
-    const payload = {
-      businessId, name: cleanName, address: String(address || '').trim(), phone: String(phone || '').trim(),
-      code: `SUC-${String(additional + 1).padStart(2, '0')}`,
-      isMain: false, active: true, monthlyPrice: BRANCH_MONTHLY_PRICE,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(), createdBy: currentUser.id,
-    }
-    const ref = await addDoc(collection(db, 'businesses', businessId, 'branches'), payload)
-    const created = { id: ref.id, ...payload, createdAt: new Date(), updatedAt: new Date() }
+    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    const result = await fn({ action: 'create', name: cleanName, address, phone })
+    const created = result.data?.branch
+    if (!created?.id) throw new Error('No se pudo crear la sucursal.')
     setStoredBranches(current => [...current, created])
     return created
   }
@@ -81,7 +78,8 @@ export function BranchProvider({ children }) {
   const setBranchActive = async (branchId, active) => {
     const branch = storedBranches.find(item => item.id === branchId)
     if (!branch || branch.isMain) throw new Error('La sucursal principal no puede suspenderse.')
-    await updateDoc(doc(db, 'businesses', businessId, 'branches', branchId), { active, updatedAt: serverTimestamp() })
+    const fn = httpsCallable(getFunctions(), 'manageTestBranch')
+    await fn({ action: 'setActive', branchId, active })
     setStoredBranches(current => current.map(item => item.id === branchId ? { ...item, active } : item))
     if (!active && selectedBranchId === branchId) selectBranch('main')
   }

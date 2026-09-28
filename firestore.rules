@@ -36,15 +36,7 @@ service cloud.firestore {
       }
       match /branches/{branchId} {
         allow read: if belongsTo(businessId) || isSuperAdmin();
-        allow create: if isAdmin(businessId)
-          && validBusinessPayload(businessId)
-          && request.resource.data.isMain == false
-          && request.resource.data.monthlyPrice == 300;
-        allow update: if isAdmin(businessId)
-          && request.resource.data.businessId == resource.data.businessId
-          && request.resource.data.isMain == resource.data.isMain
-          && request.resource.data.monthlyPrice == resource.data.monthlyPrice;
-        allow delete: if false;
+        allow write: if false;
       }
       match /products/{docId} {
         allow read: if belongsTo(businessId) || isSuperAdmin();

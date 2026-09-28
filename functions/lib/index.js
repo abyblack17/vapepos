@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.setBusinessAccessAsSuperAdmin = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
+exports.deleteUserAsSuperAdmin = exports.updateUserAsSuperAdmin = exports.setBusinessAccessAsSuperAdmin = exports.manageTestBranch = exports.activateTrial = exports.deleteUser = exports.auditOnSaleDelete = exports.deactivateUser = exports.updateUserPermissions = exports.generateDemoMonth = exports.claimVacantAdmin = exports.updateUserRole = exports.addEmployeeToStore = exports.registerBusiness = exports.commitSale = exports.adjustLiquidBalance = exports.openLiquidBottle = exports.syncMyAccessClaims = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
 const app_1 = require("firebase-admin/app");
@@ -1019,6 +1019,69 @@ exports.activateTrial = (0, https_1.onCall)({ region: 'us-central1', enforceAppC
         createdAt: firestore_2.FieldValue.serverTimestamp(),
     });
     return { success: true, expiresAt: expiresAt.toISOString() };
+});
+// ══════════════════════════════════════════════════════════════
+// Sucursales beta: exclusivamente cuenta Tests
+// ══════════════════════════════════════════════════════════════
+exports.manageTestBranch = (0, https_1.onCall)({ region: 'us-central1', enforceAppCheck: true }, async (request) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    if (!request.auth)
+        throw new https_1.HttpsError('unauthenticated', 'No autenticado.');
+    const email = String(request.auth.token.email || '').trim().toLowerCase();
+    if (email !== 'test01@gmail.com')
+        throw new https_1.HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para la cuenta Tests.');
+    const profileSnap = await db.doc(`users/${request.auth.uid}`).get();
+    const profile = profileSnap.data();
+    const businessId = String((profile === null || profile === void 0 ? void 0 : profile.businessId) || '');
+    if (!profileSnap.exists || (profile === null || profile === void 0 ? void 0 : profile.active) !== true || (profile === null || profile === void 0 ? void 0 : profile.role) !== 'Administrador' || !businessId) {
+        throw new https_1.HttpsError('permission-denied', 'Solo el administrador activo de Tests puede administrar sucursales.');
+    }
+    const action = String(((_a = request.data) === null || _a === void 0 ? void 0 : _a.action) || '');
+    const branchesRef = db.collection(`businesses/${businessId}/branches`);
+    const now = firestore_2.FieldValue.serverTimestamp();
+    if (action === 'create') {
+        const name = String(((_b = request.data) === null || _b === void 0 ? void 0 : _b.name) || '').trim().slice(0, 80);
+        const address = String(((_c = request.data) === null || _c === void 0 ? void 0 : _c.address) || '').trim().slice(0, 180);
+        const phone = String(((_d = request.data) === null || _d === void 0 ? void 0 : _d.phone) || '').trim().slice(0, 30);
+        if (!name)
+            throw new https_1.HttpsError('invalid-argument', 'El nombre de la sucursal es requerido.');
+        const existing = await branchesRef.get();
+        const additional = existing.docs.filter(item => { var _a; return ((_a = item.data()) === null || _a === void 0 ? void 0 : _a.isMain) !== true; }).length;
+        if (additional >= 5)
+            throw new https_1.HttpsError('failed-precondition', 'El negocio ya alcanzó el máximo de 5 sucursales adicionales.');
+        const branchRef = branchesRef.doc();
+        const branch = {
+            businessId, name, address, phone,
+            code: `SUC-${String(additional + 1).padStart(2, '0')}`,
+            isMain: false, active: true, monthlyPrice: 300,
+            createdAt: now, updatedAt: now, createdBy: request.auth.uid,
+        };
+        await branchRef.set(branch);
+        await db.collection(`businesses/${businessId}/audit_logs`).add({
+            action: 'CREATE_BRANCH', module: 'branches', userId: request.auth.uid,
+            userName: email, role: 'Administrador', targetId: branchRef.id,
+            targetName: name, businessId, after: { code: branch.code, monthlyPrice: 300 }, createdAt: now,
+        });
+        return { success: true, branch: { id: branchRef.id, businessId, name, address, phone, code: branch.code, isMain: false, active: true, monthlyPrice: 300, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } };
+    }
+    if (action === 'setActive') {
+        const branchId = String(((_e = request.data) === null || _e === void 0 ? void 0 : _e.branchId) || '');
+        const active = ((_f = request.data) === null || _f === void 0 ? void 0 : _f.active) === true;
+        if (!branchId)
+            throw new https_1.HttpsError('invalid-argument', 'Sucursal requerida.');
+        const branchRef = branchesRef.doc(branchId);
+        const branchSnap = await branchRef.get();
+        if (!branchSnap.exists || ((_g = branchSnap.data()) === null || _g === void 0 ? void 0 : _g.isMain) === true)
+            throw new https_1.HttpsError('not-found', 'Sucursal no encontrada.');
+        await branchRef.update({ active, updatedAt: now });
+        await db.collection(`businesses/${businessId}/audit_logs`).add({
+            action: active ? 'ACTIVATE_BRANCH' : 'SUSPEND_BRANCH', module: 'branches',
+            userId: request.auth.uid, userName: email, role: 'Administrador', targetId: branchId,
+            targetName: ((_h = branchSnap.data()) === null || _h === void 0 ? void 0 : _h.name) || branchId, businessId, after: { active }, createdAt: now,
+        });
+        return { success: true, branchId, active };
+    }
+    throw new https_1.HttpsError('invalid-argument', 'Acción de sucursal no válida.');
 });
 // ══════════════════════════════════════════════════════════════
 // SuperAdmin: activar, suspender o rechazar un negocio completo

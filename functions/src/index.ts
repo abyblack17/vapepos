@@ -1121,6 +1121,72 @@ export const activateTrial = onCall(
 )
 
 // ══════════════════════════════════════════════════════════════
+// Sucursales beta: exclusivamente cuenta Tests
+// ══════════════════════════════════════════════════════════════
+export const manageTestBranch = onCall(
+  { region: 'us-central1', enforceAppCheck: true },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'No autenticado.')
+    const email = String(request.auth.token.email || '').trim().toLowerCase()
+    if (email !== 'test01@gmail.com') throw new HttpsError('permission-denied', 'La prueba de sucursales solo está habilitada para la cuenta Tests.')
+
+    const profileSnap = await db.doc(`users/${request.auth.uid}`).get()
+    const profile = profileSnap.data()
+    const businessId = String(profile?.businessId || '')
+    if (!profileSnap.exists || profile?.active !== true || profile?.role !== 'Administrador' || !businessId) {
+      throw new HttpsError('permission-denied', 'Solo el administrador activo de Tests puede administrar sucursales.')
+    }
+
+    const action = String(request.data?.action || '')
+    const branchesRef = db.collection(`businesses/${businessId}/branches`)
+    const now = FieldValue.serverTimestamp()
+
+    if (action === 'create') {
+      const name = String(request.data?.name || '').trim().slice(0, 80)
+      const address = String(request.data?.address || '').trim().slice(0, 180)
+      const phone = String(request.data?.phone || '').trim().slice(0, 30)
+      if (!name) throw new HttpsError('invalid-argument', 'El nombre de la sucursal es requerido.')
+      const existing = await branchesRef.get()
+      const additional = existing.docs.filter(item => item.data()?.isMain !== true).length
+      if (additional >= 5) throw new HttpsError('failed-precondition', 'El negocio ya alcanzó el máximo de 5 sucursales adicionales.')
+
+      const branchRef = branchesRef.doc()
+      const branch = {
+        businessId, name, address, phone,
+        code: `SUC-${String(additional + 1).padStart(2, '0')}`,
+        isMain: false, active: true, monthlyPrice: 300,
+        createdAt: now, updatedAt: now, createdBy: request.auth.uid,
+      }
+      await branchRef.set(branch)
+      await db.collection(`businesses/${businessId}/audit_logs`).add({
+        action: 'CREATE_BRANCH', module: 'branches', userId: request.auth.uid,
+        userName: email, role: 'Administrador', targetId: branchRef.id,
+        targetName: name, businessId, after: { code: branch.code, monthlyPrice: 300 }, createdAt: now,
+      })
+      return { success: true, branch: { id: branchRef.id, businessId, name, address, phone, code: branch.code, isMain: false, active: true, monthlyPrice: 300, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }
+    }
+
+    if (action === 'setActive') {
+      const branchId = String(request.data?.branchId || '')
+      const active = request.data?.active === true
+      if (!branchId) throw new HttpsError('invalid-argument', 'Sucursal requerida.')
+      const branchRef = branchesRef.doc(branchId)
+      const branchSnap = await branchRef.get()
+      if (!branchSnap.exists || branchSnap.data()?.isMain === true) throw new HttpsError('not-found', 'Sucursal no encontrada.')
+      await branchRef.update({ active, updatedAt: now })
+      await db.collection(`businesses/${businessId}/audit_logs`).add({
+        action: active ? 'ACTIVATE_BRANCH' : 'SUSPEND_BRANCH', module: 'branches',
+        userId: request.auth.uid, userName: email, role: 'Administrador', targetId: branchId,
+        targetName: branchSnap.data()?.name || branchId, businessId, after: { active }, createdAt: now,
+      })
+      return { success: true, branchId, active }
+    }
+
+    throw new HttpsError('invalid-argument', 'Acción de sucursal no válida.')
+  }
+)
+
+// ══════════════════════════════════════════════════════════════
 // SuperAdmin: activar, suspender o rechazar un negocio completo
 // ══════════════════════════════════════════════════════════════
 export const setBusinessAccessAsSuperAdmin = onCall(
