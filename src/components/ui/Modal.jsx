@@ -1,19 +1,19 @@
 import React, { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
-export default function Modal({ title, onClose, children, size = 'md' }) {
+export default function Modal({ title, onClose, children, size = 'md', closeOnEscape = false, closeOnBackdrop = false }) {
   useEffect(() => {
     const original = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
-    const handler = (e) => { if (e.key === 'Escape') onClose() }
+    const handler = (e) => { if (closeOnEscape && e.key === 'Escape' && !e.defaultPrevented) onClose() }
     window.addEventListener('keydown', handler)
 
     return () => {
       document.body.style.overflow = original
       window.removeEventListener('keydown', handler)
     }
-  }, [onClose])
+  }, [onClose, closeOnEscape])
 
   const maxWidths = {
     sm: '384px',
@@ -35,7 +35,7 @@ export default function Modal({ title, onClose, children, size = 'md' }) {
         backdropFilter:  'blur(4px)',
         padding:         '16px',
       }}
-      onClick={onClose}
+      onClick={e => { if (closeOnBackdrop && e.target === e.currentTarget) onClose() }}
     >
       <div
         style={{
@@ -50,6 +50,9 @@ export default function Modal({ title, onClose, children, size = 'md' }) {
           flexDirection: 'column',
           animation:     'modalScaleIn 0.15s ease-out',
         }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -65,6 +68,8 @@ export default function Modal({ title, onClose, children, size = 'md' }) {
             {title}
           </h2>
           <button
+            type="button"
+            aria-label="Cerrar ventana"
             onClick={onClose}
             style={{
               width:      '32px',
