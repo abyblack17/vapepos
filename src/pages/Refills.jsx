@@ -9,7 +9,7 @@ import { fmt, genId } from '../utils/helpers'
 import { findExistingByNameOrCode, hasDuplicateName, makeLiquidCode } from '../utils/recordGuards'
 import { bizAdd, bizSet, bizUpdate, bizDelete } from '../services/firestoreService'
 import { uploadLiquidImage, deleteImage } from '../services/storageService'
-import { getBottlePct, getRendimientoReport, detectLoss, getNicotinaLabel, getRefillButtons, getPointsForType, getRefillProjections, fmtProjection, fmtLiquidMoney } from '../services/liquidService'
+import { getBottlePct, detectLoss, getNicotinaLabel, getRefillButtons, getPointsForType, getRefillProjections, fmtProjection, fmtLiquidMoney } from '../services/liquidService'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 import { httpsCallable } from 'firebase/functions'
@@ -456,7 +456,7 @@ export default function Refills() {
                     <td className="table-cell">
                       {l.hasActive ? <><span className="badge badge-green">Sí</span><span className="ml-1 text-xs text-slate-500 font-mono">{l.activeSaldo}pts</span></> : <span className="badge badge-gray">No</span>}
                     </td>
-                    <td className="table-cell"><span className="badge badge-amber font-mono text-xs">{getRefillButtons(state.settings).map(b => 'RD$' + b.price + ': ' + fmtProjection(getPointsForType(l, b.price, state.settings)) + ' pts').join(' · ')}</span></td>
+                    <td className="table-cell"><span className="badge badge-amber font-mono text-xs">{getRefillButtons(state.settings).map(b => fmtProjection(getPointsForType(l, b.price, state.settings))).join('/')}</span></td>
                     <td className="table-cell"><span className={`badge ${l.active ? 'badge-green' : 'badge-gray'}`}>{l.active ? 'Activo' : 'Inactivo'}</span></td>
                     <td className="table-cell">
                       <div className="flex gap-1">
@@ -854,7 +854,6 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
               </div>
             })}
           </div>
-          <LiquidProjectionCard liquid={form} settings={settings} />
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
@@ -911,7 +910,6 @@ function AdjustSaldoModal({ liquid, onClose, onSave }) {
 }
 
 function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
-  const r = getRendimientoReport(liquid, refillSales, settings)
   return (
     <Modal title={`💧 ${liquid.name}`} onClose={onClose}>
       <div className="space-y-4">
@@ -922,7 +920,7 @@ function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
             { l: 'Costo botella', v: fmt(liquid.costPerBottle) },
             { l: 'Precio frasco', v: liquid.pricePerBottle ? fmt(liquid.pricePerBottle) : '—' },
             { l: 'Botellas cerradas', v: liquid.closedBottles },
-            { l: 'Consumo por recarga', v: getRefillButtons(settings).map(b => 'RD$' + b.price + ': ' + fmtProjection(getPointsForType(liquid, b.price, settings)) + ' pts').join(' · ') },
+            { l: 'Consumo por recarga', v: getRefillButtons(settings).map(b => fmtProjection(getPointsForType(liquid, b.price, settings))).join('/') },
           ].map((s, i) => (
             <div key={i} className="bg-[#101c35] rounded-lg p-3">
               <div className="text-xs text-slate-500">{s.l}</div>
@@ -935,7 +933,6 @@ function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
           {[
             { l: 'Total recargas', v: liquid.totalRechargesAllTime || 0, c: 'text-[#00e5a0]' },
             { l: 'Ingresos totales', v: fmt(liquid.totalRevenueAllTime || 0), c: 'text-[#f59e0b]' },
-            { l: 'Ganancia real', v: fmtLiquidMoney(r.realNetProfit), c: r.realNetProfit >= 0 ? 'text-[#00e5a0]' : 'text-red-400' },
           ].map((s, i) => (
             <div key={i} className="bg-[#101c35] rounded-lg p-3 text-center">
               <div className="text-xs text-slate-500 mb-0.5">{s.l}</div>
@@ -943,7 +940,6 @@ function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
             </div>
           ))}
         </div>
-        <LiquidProjectionCard liquid={liquid} settings={settings} />
         <button className="btn-secondary w-full" onClick={onClose}>Cerrar</button>
       </div>
     </Modal>

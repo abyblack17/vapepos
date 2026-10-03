@@ -59,6 +59,7 @@ test('rendered form uses configured prices and projections show each bottle cons
   getRefillButtons:context.getRefillButtons,getPointsForType:context.getPointsForType,getRefillProjections:context.getRefillProjections,fmtProjection:context.fmtProjection,fmtLiquidMoney:context.fmtLiquidMoney}
  vm.createContext(ui);vm.runInContext(esbuild.transformSync(formSource+'\n'+projectionSource,{loader:'jsx'}).code,ui)
  const html=renderToStaticMarkup(React.createElement(ui.LiquidFormModal,{settings,onSave:()=>{},onClose:()=>{}}))
+ assert.doesNotMatch(html,/Proyecciones por frasco|Ingreso proyectado|Beneficio proyectado|Beneficio por recarga/)
  assert.match(html,/RD\$ 25/);assert.match(html,/RD\$ 50/);assert.match(html,/RD\$ 100/);assert.doesNotMatch(html,/RD\$150|RD\$ 150/)
  const salt={...liquid,name:'Sales 30',sizeML:30,activeCapacity:30,refillConsumption:{100:3}}
  const projection=renderToStaticMarkup(React.createElement(ui.LiquidProjectionCard,{liquid:salt,settings}))
@@ -66,3 +67,13 @@ test('rendered form uses configured prices and projections show each bottle cons
  const example=renderToStaticMarkup(React.createElement(ui.LiquidProjectionCard,{liquid,settings}))
  assert.match(example,/RD\$15.40/);assert.match(example,/RD\$770.00/);assert.match(example,/12.5 recargas/)
 })
+
+ test('performance cards are only accessible within the Pro performance section',()=>{
+ const page=fs.readFileSync(path.resolve(__dirname,'../src/pages/Refills.jsx'),'utf8')
+ assert.equal((page.match(/<LiquidProjectionCard\b/g)||[]).length,1)
+ const section=page.slice(page.indexOf("{tab === 'Rendimiento'"),page.indexOf('{/* ── Modals'))
+ assert.match(section,/canViewRendimiento \?/);assert.match(section,/<LiquidProjectionCard/)
+ const details=page.slice(page.indexOf('function LiquidDetailModal('),page.indexOf('function LiquidProjectionCard('))
+ assert.doesNotMatch(details,/LiquidProjectionCard|getRendimientoReport|Ganancia real/)
+ assert.match(page,/getPointsForType\(l, b.price, state.settings\)\)\)\.join\('\/'\)/)
+ })
