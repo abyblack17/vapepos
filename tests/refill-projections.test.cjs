@@ -74,6 +74,7 @@ test('rendered form uses configured prices and projections show each bottle cons
  const section=page.slice(page.indexOf("{tab === 'Rendimiento'"),page.indexOf('{/* ── Modals'))
  assert.match(section,/canViewRendimiento \?/);assert.match(section,/<LiquidProjectionCard/)
  const details=page.slice(page.indexOf('function LiquidDetailModal('),page.indexOf('function LiquidProjectionCard('))
- assert.doesNotMatch(details,/LiquidProjectionCard|getRendimientoReport|Ganancia real/)
+ assert.doesNotMatch(details,/LiquidProjectionCard|Ingreso proyectado|Beneficio proyectado/)
+ assert.match(details,/Ganancia real/);assert.match(details,/fmtLiquidMoney\(r.realNetProfit\)/)
  assert.match(page,/getPointsForType\(l, b.price, state.settings\)\)\)\.join\('\/'\)/)
  })

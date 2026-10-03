@@ -9,7 +9,7 @@ import { fmt, genId } from '../utils/helpers'
 import { findExistingByNameOrCode, hasDuplicateName, makeLiquidCode } from '../utils/recordGuards'
 import { bizAdd, bizSet, bizUpdate, bizDelete } from '../services/firestoreService'
 import { uploadLiquidImage, deleteImage } from '../services/storageService'
-import { getBottlePct, detectLoss, getNicotinaLabel, getRefillButtons, getPointsForType, getRefillProjections, fmtProjection, fmtLiquidMoney } from '../services/liquidService'
+import { getBottlePct, getRendimientoReport, detectLoss, getNicotinaLabel, getRefillButtons, getPointsForType, getRefillProjections, fmtProjection, fmtLiquidMoney } from '../services/liquidService'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 import { httpsCallable } from 'firebase/functions'
@@ -910,6 +910,7 @@ function AdjustSaldoModal({ liquid, onClose, onSave }) {
 }
 
 function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
+  const r = getRendimientoReport(liquid, refillSales, settings)
   return (
     <Modal title={`💧 ${liquid.name}`} onClose={onClose}>
       <div className="space-y-4">
@@ -933,6 +934,7 @@ function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
           {[
             { l: 'Total recargas', v: liquid.totalRechargesAllTime || 0, c: 'text-[#00e5a0]' },
             { l: 'Ingresos totales', v: fmt(liquid.totalRevenueAllTime || 0), c: 'text-[#f59e0b]' },
+            { l: 'Ganancia real', v: fmtLiquidMoney(r.realNetProfit), c: r.realNetProfit >= 0 ? 'text-[#00e5a0]' : 'text-red-400' },
           ].map((s, i) => (
             <div key={i} className="bg-[#101c35] rounded-lg p-3 text-center">
               <div className="text-xs text-slate-500 mb-0.5">{s.l}</div>
