@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import ResetBusinessButton from '../components/common/ResetBusinessButton'
+import BusinessSupportView from '../components/common/BusinessSupportView'
+import { businessLicenseStatus, LICENSE_LABELS, lastActivityLabel, trialRemainingLabel } from '../utils/businessSupport'
+import { PURCHASE_OPTIONS, trialExpired } from '../config/trial'
 import { db } from '../config/firebase'
 import {
   collection, getDocs, query, orderBy as fbOrderBy,
-  updateDoc, deleteDoc, doc, addDoc, serverTimestamp,
+  updateDoc, deleteDoc, doc, addDoc, serverTimestamp, onSnapshot,
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { fmt } from '../utils/helpers'
@@ -38,7 +42,7 @@ const endOfDayFromInput = (dateStr) => {
 }
 
 const ts = (seconds) => seconds ? new Date(seconds * 1000).toLocaleDateString('es-DO') : '—'
-const businessStatus = (business) => business.activationPending === true ? 'pending' : (business.active === false ? 'suspended' : 'active')
+const businessStatus = (business) => business.activationPending === true || trialExpired(business) ? 'pending' : (business.active === false ? 'suspended' : 'active')
 const BUSINESS_STATUS_LABEL = { pending: 'Pendiente', active: 'Activo', suspended: 'Suspendido' }
 const BUSINESS_STATUS_BADGE = { pending: 'badge-amber', active: 'badge-green', suspended: 'badge-red' }
 
@@ -61,6 +65,10 @@ export default function SuperAdmin() {
   const [editingAnn, setEditingAnn]         = useState(null)
   const [sending, setSending]               = useState(false)
   const [bizSearch, setBizSearch]           = useState('')
+  const [licenseFilter, setLicenseFilter] = useState('all')
+  const [supportSession, setSupportSession] = useState(null)
+  const [openingSupport, setOpeningSupport] = useState(null)
+  const [licenseNow, setLicenseNow] = useState(Date.now())
   const [userSearch, setUserSearch]         = useState('')
   const [msgModal, setMsgModal]             = useState(null)
   const [msgText, setMsgText]               = useState('')
@@ -73,12 +81,31 @@ export default function SuperAdmin() {
   const [savingPlanExpiry, setSavingPlanExpiry] = useState(false)
   const [deletingBizId, setDeletingBizId]   = useState(null)
   const [activationModal, setActivationModal] = useState(null)
-  const [activationPlan, setActivationPlan] = useState('pro')
-  const [activationExpiry, setActivationExpiry] = useState(addMonthsDateInput(1))
   const [activationNote, setActivationNote] = useState('')
   const [savingActivation, setSavingActivation] = useState(false)
+  const [purchasePackage, setPurchasePackage] = useState('autonomo')
+  const [businessPasswordModal, setBusinessPasswordModal] = useState(null)
+  const [businessPasswordForm, setBusinessPasswordForm] = useState({ password: '', confirm: '' })
+  const [savingBusinessPassword, setSavingBusinessPassword] = useState(false)
 
   useEffect(() => { loadAll() }, [])
+  useEffect(() => {
+    const stop = onSnapshot(query(collection(db, 'businesses'), fbOrderBy('createdAt', 'desc')),
+      snap => setBusinesses(snap.docs.map(item => ({ ...item.data(), id: item.id }))),
+      error => console.warn('Actualización de negocios:', error.code))
+    const timer = setInterval(() => setLicenseNow(Date.now()), 60000)
+    return () => { stop(); clearInterval(timer) }
+  }, [])
+
+  const openSupport = async business => {
+    if (openingSupport) return
+    setOpeningSupport(business.id)
+    try {
+      const result = await httpsCallable(getFunctions(), 'openBusinessSupport')({ businessId: business.id })
+      setSupportSession(result.data)
+    } catch (error) { toast.error(error.message || 'No se pudo abrir soporte') }
+    finally { setOpeningSupport(null) }
+  }
 
   const loadAll = async () => {
     setLoading(true)
@@ -270,6 +297,8 @@ export default function SuperAdmin() {
       ...b,
       active,
       activationPending: false,
+      ...(status === 'active' ? { licenseType: 'permanent' } : {}),
+      ...(result.data.businessUpdate || {}),
       ...(options.plan ? { plan: options.plan } : {}),
       ...(options.planExpiresAt ? { planExpiresAt: new Date(options.planExpiresAt) } : {}),
     } : b))
@@ -289,6 +318,7 @@ export default function SuperAdmin() {
 
   const toggleBusiness = async (biz) => {
     const currentStatus = businessStatus(biz)
+    if (currentStatus !== 'active' && biz.licenseType !== 'permanent') { openActivation(biz); return }
     try {
       await changeBusinessAccess(biz, currentStatus === 'active' ? 'suspended' : 'active')
       toast.success(currentStatus === 'active' ? `Negocio "${biz.name}" suspendido` : `Negocio "${biz.name}" activado`)
@@ -299,23 +329,16 @@ export default function SuperAdmin() {
 
   const openActivation = (biz) => {
     setActivationModal(biz)
-    setActivationPlan('pro')
-    setActivationExpiry(addMonthsDateInput(1))
     setActivationNote('')
+    setPurchasePackage('autonomo')
   }
 
   const activateBusiness = async () => {
     if (!activationModal) return
-    if (activationPlan === 'pro' && !activationExpiry) {
-      toast.error('Selecciona la fecha de vencimiento del Plan Pro.')
-      return
-    }
     setSavingActivation(true)
     try {
-      const expiresAt = activationPlan === 'pro' ? endOfDayFromInput(activationExpiry)?.toISOString() : null
       await changeBusinessAccess(activationModal, 'active', {
-        plan: activationPlan,
-        planExpiresAt: expiresAt,
+        ...(activationModal.licenseType !== 'permanent' ? { purchasePackage } : {}),
         note: activationNote.trim(),
       })
       toast.success(`Cuenta de "${activationModal.name}" activada`)
@@ -355,6 +378,38 @@ export default function SuperAdmin() {
       role: user.role || 'Cajero',
       active: user.active !== false,
     })
+  }
+
+  const openBusinessPassword = (business) => {
+    const owner = allUsers.find(user => user.id === business.ownerId)
+      || allUsers.find(user => user.businessId === business.id && user.role === 'Administrador' && user.active !== false)
+    if (!owner) {
+      toast.error('Este negocio no tiene un administrador propietario disponible.')
+      return
+    }
+    setBusinessPasswordModal({ business, owner })
+    setBusinessPasswordForm({ password: '', confirm: '' })
+  }
+
+  const saveBusinessPassword = async () => {
+    if (!businessPasswordModal) return
+    const { password, confirm } = businessPasswordForm
+    if (!password || !confirm) return toast.error('Completa y confirma la contraseña nueva.')
+    if (password.length < 8 || password.length > 128) return toast.error('La contraseña debe tener entre 8 y 128 caracteres.')
+    if (password !== confirm) return toast.error('Las contraseñas no coinciden.')
+
+    setSavingBusinessPassword(true)
+    try {
+      const fn = httpsCallable(getFunctions(), 'updateUserAsSuperAdmin')
+      await fn({ targetUid: businessPasswordModal.owner.id, password })
+      toast.success(`Contraseña de "${businessPasswordModal.business.name}" actualizada.`)
+      setBusinessPasswordModal(null)
+      setBusinessPasswordForm({ password: '', confirm: '' })
+    } catch (error) {
+      toast.error('Error: ' + (error?.message || 'No se pudo cambiar la contraseña.'))
+    } finally {
+      setSavingBusinessPassword(false)
+    }
   }
 
   const saveUserChanges = async () => {
@@ -515,8 +570,9 @@ export default function SuperAdmin() {
     !s.fromAdmin && (sugFilter === 'todos' || s.status === sugFilter || s.type === sugFilter)
   )
   const filteredBusinesses = businesses.filter(b =>
-    !bizSearch || b.name?.toLowerCase().includes(bizSearch.toLowerCase()) ||
-    b.phone?.includes(bizSearch) || b.address?.toLowerCase().includes(bizSearch.toLowerCase())
+    (licenseFilter === 'all' || businessLicenseStatus(b, licenseNow) === licenseFilter) &&
+    (!bizSearch || b.name?.toLowerCase().includes(bizSearch.toLowerCase()) ||
+    b.phone?.includes(bizSearch) || b.address?.toLowerCase().includes(bizSearch.toLowerCase()))
   )
   const filteredUsers = realUsers.filter(u =>
     !userSearch || u.displayName?.toLowerCase().includes(userSearch.toLowerCase()) ||
@@ -528,6 +584,8 @@ export default function SuperAdmin() {
   const bizTotalSales   = bizSales.reduce((a, s) => a + (s.total || 0), 0)
   const bizTotalProfit  = bizSales.reduce((a, s) => a + (s.profit || 0), 0)
   const bizTotalRefills = bizSales.reduce((a, s) => a + (s.refills?.length || 0), 0)
+
+  if (supportSession) return <BusinessSupportView session={supportSession} onExit={() => setSupportSession(null)} />
 
   return (
     <div className="h-screen overflow-y-auto overscroll-contain bg-[#080d18]" style={{ height: '100dvh' }}>
@@ -635,7 +693,7 @@ export default function SuperAdmin() {
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <div className="font-display text-xl font-bold text-slate-100">Solicitudes pendientes</div>
-                  <div className="text-sm text-slate-500 mt-1">Solo las cuentas que actives manualmente podrán entrar a VapePOS.</div>
+                  <div className="text-sm text-slate-500 mt-1">Las nuevas cuentas entran automáticamente con Pro por 3 días. Activa aquí la compra de por vida al verificar el pago.</div>
                 </div>
                 <div className="badge badge-amber">{pendingBusinesses.length} pendientes</div>
               </div>
@@ -681,6 +739,14 @@ export default function SuperAdmin() {
           {/* ══════════ NEGOCIOS ══════════ */}
           {tab === 'Negocios' && (
             <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <select aria-label="Filtrar negocios por licencia" className="select max-w-xs" value={licenseFilter} onChange={event => setLicenseFilter(event.target.value)}>
+                  <option value="all">Todos los negocios</option>
+                  {Object.entries(LICENSE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+                <span className="text-amber-300">En prueba: {businesses.filter(b => businessLicenseStatus(b, licenseNow) === 'trial').length}</span>
+                <span className="text-red-300">Prueba vencida: {businesses.filter(b => businessLicenseStatus(b, licenseNow) === 'expired').length}</span>
+              </div>
               <div className="flex items-center gap-3">
                 <div className="flex-1 flex items-center gap-2 bg-[#101c35] border border-white/10 rounded-lg px-3 py-2">
                   <span className="text-slate-500">🔍</span>
@@ -704,6 +770,8 @@ export default function SuperAdmin() {
                         <div>
                           <div className="font-semibold text-slate-200">{b.name}</div>
                           <div className="text-xs text-slate-600 font-mono mt-0.5">{b.id.slice(0,12)}...</div>
+                          <div className="text-xs text-amber-300 mt-1">{LICENSE_LABELS[businessLicenseStatus(b, licenseNow)]} {trialRemainingLabel(b, licenseNow)}</div>
+                          <div className="text-xs text-slate-400 mt-1">Última actividad: {lastActivityLabel(b.lastActivityAt)}</div>
                         </div>
                         <div className="flex gap-1.5 flex-wrap justify-end">
                           <span className={`badge ${b.plan === 'pro' ? 'badge-green' : 'badge-gray'}`}>
@@ -721,6 +789,7 @@ export default function SuperAdmin() {
                         <div>🗓 {ts(b.createdAt?.seconds)}</div>
                       </div>
                       <div className="flex gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
+                        <button className="btn-secondary text-xs" disabled={!!openingSupport} onClick={() => openSupport(b)}>{openingSupport === b.id ? 'Abriendo…' : 'Entrar en modo soporte'}</button>
                         <button onClick={() => changePlan(b, b.plan === 'pro' ? 'basic' : 'pro')}
                           className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
                             b.plan === 'pro'
@@ -745,6 +814,7 @@ export default function SuperAdmin() {
                           className="flex-1 text-xs px-3 py-2 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
                           ✉ Mensaje
                         </button>
+                        <ResetBusinessButton businessId={b.id} businessName={b.name} />
                         <button onClick={() => deleteBusinessPermanent(b)} disabled={deletingBizId === b.id}
                           className="flex-1 text-xs px-3 py-2 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50">
                           {deletingBizId === b.id ? 'Eliminando...' : '🗑 Eliminar'}
@@ -774,6 +844,8 @@ export default function SuperAdmin() {
                           <td className="table-cell">
                             <div className="font-semibold text-slate-200">{b.name}</div>
                             <div className="text-xs text-slate-600 font-mono">{b.id.slice(0,10)}...</div>
+                            <div className="text-xs text-amber-300 mt-1">{LICENSE_LABELS[businessLicenseStatus(b, licenseNow)]} {trialRemainingLabel(b, licenseNow)}</div>
+                            <div className="text-xs text-slate-400 mt-1">Última actividad: {lastActivityLabel(b.lastActivityAt)}</div>
                           </td>
                           <td className="table-cell text-slate-400 text-xs">{b.phone || '—'}</td>
                           <td className="table-cell">
@@ -793,6 +865,7 @@ export default function SuperAdmin() {
                           </td>
                           <td className="table-cell" onClick={e => e.stopPropagation()}>
                             <div className="flex gap-1 flex-wrap">
+                              <button className="btn-secondary text-xs" disabled={!!openingSupport} onClick={() => openSupport(b)}>{openingSupport === b.id ? 'Abriendo…' : 'Modo soporte'}</button>
                               <button onClick={() => changePlan(b, b.plan === 'pro' ? 'basic' : 'pro')}
                                 className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
                                   b.plan === 'pro'
@@ -817,6 +890,7 @@ export default function SuperAdmin() {
                                 className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
                                 ✉ Mensaje
                               </button>
+                              <ResetBusinessButton businessId={b.id} businessName={b.name} />
                               <button onClick={() => deleteBusinessPermanent(b)} disabled={deletingBizId === b.id}
                                 className="text-xs px-2.5 py-1 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50">
                                 {deletingBizId === b.id ? 'Eliminando...' : 'Eliminar'}
@@ -892,7 +966,13 @@ export default function SuperAdmin() {
                     </>
                   )}
 
-                  <div className="text-xs text-slate-600">ID: {selectedBiz.id}</div>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/10 pt-4">
+                    <div className="text-xs text-slate-600">ID: {selectedBiz.id}</div>
+                    <button onClick={() => openBusinessPassword(selectedBiz)}
+                      className="text-xs px-3 py-2 rounded-lg border border-[#f59e0b]/25 text-[#f59e0b] hover:bg-[#f59e0b]/10 transition-all">
+                      🔐 Cambiar clave de acceso
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1287,12 +1367,6 @@ export default function SuperAdmin() {
                                 className="text-xs px-2.5 py-1 rounded-lg border border-[#00c4e8]/20 text-[#00c4e8] hover:bg-[#00c4e8]/10 transition-all">
                                 ✏️ Editar
                               </button>
-                              {a.active && (
-                                <button onClick={() => deactivateAnnouncement(a)}
-                                  className="text-xs px-2.5 py-1 rounded-lg border border-[#f59e0b]/20 text-[#f59e0b] hover:bg-[#f59e0b]/10 transition-all">
-                                  Desactivar
-                                </button>
-                              )}
                               <button onClick={() => deleteAnnouncement(a)}
                                 className="text-xs px-2.5 py-1 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all">
                                 🗑 Eliminar
@@ -1327,23 +1401,12 @@ export default function SuperAdmin() {
             </div>
             <div className="alert-info text-xs">La cuenta y sus usuarios recibirán acceso inmediatamente después de confirmar.</div>
             <div>
-              <label className="label">Plan inicial</label>
-              <select className="select" value={activationPlan} onChange={e => setActivationPlan(e.target.value)}>
-                <option value="pro">Plan Pro</option>
-                <option value="starter">Plan Básico</option>
+              <label className="label">Compra de por vida</label>
+              <select className="select" value={purchasePackage} onChange={e => setPurchasePackage(e.target.value)}>
+                {PURCHASE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.name} — RD${option.price.toLocaleString('en-US')} · {option.months} meses Pro</option>)}
               </select>
             </div>
-            {activationPlan === 'pro' && (
-              <div>
-                <label className="label">Vencimiento del Plan Pro</label>
-                <input className="input" type="date" value={activationExpiry} onChange={e => setActivationExpiry(e.target.value)} />
-                <div className="grid grid-cols-3 gap-2 mt-2">
-                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(1))}>+1 mes</button>
-                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(3))}>+3 meses</button>
-                  <button className="btn-secondary text-xs" onClick={() => setActivationExpiry(addMonthsDateInput(12))}>+1 año</button>
-                </div>
-              </div>
-            )}
+            <p className="text-xs text-slate-400">Acceso de por vida. Pro incluye los meses de la compra seleccionada y luego es opcional por RD$600 mensuales.</p>
             <div>
               <label className="label">Nota administrativa (opcional)</label>
               <textarea className="input resize-none" rows={3} maxLength={300} value={activationNote} onChange={e => setActivationNote(e.target.value)} placeholder="Ej.: Pago verificado por transferencia" />
@@ -1429,6 +1492,43 @@ export default function SuperAdmin() {
                 <button className="btn-secondary" onClick={() => setEditingUser(null)}>Cancelar</button>
                 <button className="btn-primary" disabled={savingUser} onClick={saveUserChanges}>{savingUser ? 'Guardando...' : 'Guardar'}</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {businessPasswordModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0c1424] border border-[#f59e0b]/30 rounded-2xl p-6 w-full max-w-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-100 text-lg">Cambiar clave de acceso</div>
+                <div className="text-xs text-slate-500 mt-1">{businessPasswordModal.business.name}</div>
+              </div>
+              <button onClick={() => setBusinessPasswordModal(null)} disabled={savingBusinessPassword}
+                className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <div className="alert-info text-xs">
+              Cambiarás la contraseña del administrador propietario <strong>{businessPasswordModal.owner.email}</strong>. La contraseña anterior dejará de funcionar.
+            </div>
+            <div>
+              <label className="label">Contraseña nueva</label>
+              <input className="input" type="password" autoComplete="new-password"
+                value={businessPasswordForm.password}
+                onChange={e => setBusinessPasswordForm(form => ({ ...form, password: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Repetir contraseña nueva</label>
+              <input className="input" type="password" autoComplete="new-password"
+                value={businessPasswordForm.confirm}
+                onChange={e => setBusinessPasswordForm(form => ({ ...form, confirm: e.target.value }))} />
+            </div>
+            <div className="text-xs text-slate-500">Debe contener entre 8 y 128 caracteres.</div>
+            <div className="flex gap-2 justify-end">
+              <button className="btn-secondary" onClick={() => setBusinessPasswordModal(null)} disabled={savingBusinessPassword}>Cancelar</button>
+              <button className="btn-primary" onClick={saveBusinessPassword} disabled={savingBusinessPassword}>
+                {savingBusinessPassword ? 'Guardando...' : 'Cambiar contraseña'}
+              </button>
             </div>
           </div>
         </div>

@@ -6,6 +6,18 @@ export default function ExcelDataActions({ entity, rows, onImport, disabled = fa
   const fileRef = useRef(null)
   const [loading, setLoading] = useState(false)
 
+  const handleDownload = async (action) => {
+    setLoading(true)
+    try {
+      await action()
+    } catch (error) {
+      console.error('Error descargando Excel:', error)
+      toast.error('No se pudo descargar el Excel. Intenta nuevamente.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleImportFile = async (event) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -33,7 +45,7 @@ export default function ExcelDataActions({ entity, rows, onImport, disabled = fa
         type="button"
         className="btn-secondary text-xs"
         disabled={disabled || loading}
-        onClick={() => exportEntityToExcel(entity, rows)}
+        onClick={() => handleDownload(() => exportEntityToExcel(entity, rows))}
       >
         📊 {exportLabel}
       </button>
@@ -49,7 +61,7 @@ export default function ExcelDataActions({ entity, rows, onImport, disabled = fa
         type="button"
         className="btn-secondary text-xs"
         disabled={disabled || loading}
-        onClick={() => downloadImportTemplate(entity)}
+        onClick={() => handleDownload(() => downloadImportTemplate(entity))}
       >
         🧾 Plantilla
       </button>

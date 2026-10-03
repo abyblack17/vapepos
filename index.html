@@ -56,7 +56,6 @@
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
     <!-- Favicon -->
     <link rel="icon" href="/icon-192.png" />
@@ -66,24 +65,5 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-    <script>
-      // Detectar modo instalado / fullscreen para pulir la interfaz tipo app nativa
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-        window.matchMedia('(display-mode: fullscreen)').matches ||
-        window.navigator.standalone === true
-      if (isStandalone) document.documentElement.classList.add('standalone')
-      document.addEventListener('fullscreenchange', () => {
-        document.documentElement.classList.toggle('fullscreen', Boolean(document.fullscreenElement))
-      })
-
-      // Registrar Service Worker para PWA
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('SW registrado:', reg.scope))
-            .catch(err => console.warn('SW error:', err))
-        })
-      }
-    </script>
   </body>
 </html>

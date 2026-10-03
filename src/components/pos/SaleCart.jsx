@@ -12,6 +12,7 @@ import { issueNCF } from '../../services/fiscalService'
 import { FISCAL_TYPES, FISCAL_TYPE_OPTIONS, fiscalConfigFromSettings, findActiveSequence, sequenceRemaining, validateRncCedula } from '../../utils/fiscalHelpers'
 import { ensureRncDatabase, lookupRnc, normalizeRnc } from '../../services/rncLookupService'
 import { httpsCallable } from 'firebase/functions'
+import { offlineCallable } from '../../services/offlineSync'
 import { functions } from '../../config/firebase'
 
 const PAYMENT_METHODS = ['Efectivo', 'Transferencia', 'Tarjeta', 'Mixto']
@@ -291,6 +292,7 @@ export default function SaleCart({ onSaleComplete }) {
   const handleCobrar = async () => {
     if (cart.length === 0) { toast.error('El carrito esta vacio'); return }
     if (fiscalType !== 'none') {
+      if (!navigator.onLine) { toast.error('Los comprobantes fiscales requieren conexión. Puedes realizar una venta sin NCF.'); return }
       if (!fiscalEnabled) { toast.error('El módulo fiscal no está activo'); return }
       if (!selectedSequence) { toast.error(`No hay secuencia NCF disponible para ${fiscalType}`); return }
       if (selectedFiscal.requiresCustomer && (!fiscalCustomer.name || !validateRncCedula(fiscalCustomer.rnc))) {
@@ -391,7 +393,7 @@ export default function SaleCart({ onSaleComplete }) {
       expiresAt: fiscalData.expiresAt, sequenceId: fiscalData.sequenceId,
     } : null
     try {
-      await httpsCallable(functions, 'commitSale')({ sale, cashSessionId: state.cashSession?.id || '', fiscalInvoice })
+      await offlineCallable('commitSale', { sale, cashSessionId: state.cashSession?.id || '', fiscalInvoice })
     } catch (error) {
       toast.error(error.message || 'No se pudo completar la venta')
       return

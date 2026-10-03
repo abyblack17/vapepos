@@ -6,5 +6,6 @@ node_modules
 functions/lib
 *.log
 release/
+.test-desktop-profile/
 *.zip
 .firebase/

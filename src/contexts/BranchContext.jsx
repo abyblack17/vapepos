@@ -3,8 +3,9 @@ import { collection, getDocs, orderBy, query } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../config/firebase'
 import { useAuth } from './AuthContext'
+import { readLocal, writeLocal } from '../services/offlineStore'
 
-const BranchContext = createContext(null)
+export const BranchContext = createContext(null)
 export const MAX_ADDITIONAL_BRANCHES = 5
 export const BRANCH_MONTHLY_PRICE = 300
 
@@ -37,12 +38,17 @@ export function BranchProvider({ children }) {
     setSelectedBranchIdState(localStorage.getItem(storageKey) || 'main')
     async function loadBranches() {
       setLoadingBranches(true)
+      const cached = await readLocal(`branches:${businessId}`).catch(() => null)
+      if (cached) { setStoredBranches(cached); setLoadingBranches(false) }
+      if (!navigator.onLine) { setLoadingBranches(false); return }
       try {
         const snap = await getDocs(query(collection(db, 'businesses', businessId, 'branches'), orderBy('createdAt', 'asc')))
-        setStoredBranches(snap.docs.map(item => ({ id: item.id, ...item.data() })))
+        const rows = snap.docs.map(item => ({ id: item.id, ...item.data() }))
+        setStoredBranches(rows)
+        await writeLocal(`branches:${businessId}`, rows)
       } catch (error) {
         console.warn('No se pudieron cargar las sucursales:', error.message)
-        setStoredBranches([])
+        if (!cached) setStoredBranches([])
       } finally {
         setLoadingBranches(false)
       }

@@ -7,14 +7,16 @@ import { saveBusinessSettings, bizGetAll, bizDelete, bizSet } from '../services/
 import { usePlan } from '../hooks/usePlan'
 import UpgradeModal from '../components/ui/UpgradeModal'
 import toast from 'react-hot-toast'
-import { DEFAULT_REFILL_BUTTONS } from '../services/liquidService'
+import { DEFAULT_REFILL_BUTTONS, fmtProjection } from '../services/liquidService'
 import { canDo } from '../utils/helpers'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../config/firebase'
+import { writeAuditLog, AUDIT_MODULES } from '../services/auditService'
+import ResetBusinessButton from '../components/common/ResetBusinessButton'
 
 export default function Settings() {
   const { state, dispatch } = useApp()
-  const { businessId, currentUser, logout } = useAuth()
+  const { businessId, currentUser, logout, changeOwnPassword } = useAuth()
   const { hasFeature }      = usePlan()
   const [settings, setSettings]             = useState({ ...state.settings })
   const [uploading, setUploading]           = useState(false)
@@ -29,6 +31,8 @@ export default function Settings() {
   const [requestingPermissions, setRequestingPermissions] = useState(false)
   const [claimingAdmin, setClaimingAdmin] = useState(false)
   const [generatingDemo, setGeneratingDemo] = useState(false)
+  const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' })
+  const [changingPassword, setChangingPassword] = useState(false)
 
   useEffect(() => {
     setSettings({ ...state.settings })
@@ -56,7 +60,7 @@ export default function Settings() {
   }
 
   const handleSave = (section) => {
-    dispatch({ type: 'UPDATE_SETTINGS', payload: settings })
+    dispatch({ type: 'UPDATE_SETTINGS', payload: settings, _skipSync: true })
     saveBusinessSettings(businessId, settings, state.branchId).catch(() => {})
     toast.success(`Configuración de ${section} guardada`)
   }
@@ -64,7 +68,7 @@ export default function Settings() {
 
   const persistSettings = async (nextSettings, section) => {
     setSettings(nextSettings)
-    dispatch({ type: 'UPDATE_SETTINGS', payload: nextSettings })
+    dispatch({ type: 'UPDATE_SETTINGS', payload: nextSettings, _skipSync: true })
     await saveBusinessSettings(businessId, nextSettings, state.branchId)
     if (section) toast.success(`Configuración de ${section} guardada`)
   }
@@ -237,8 +241,8 @@ export default function Settings() {
   }
 
   const referenceButton = refillButtons.find(b => Number(b.price) === 100) || refillButtons[0] || { points: 20 }
-  const expectedPerBottle = settings.defaultBottleCapacity
-    ? Math.floor(Number(settings.defaultBottleCapacity || 0) / Number(referenceButton.points || 20))
+  const expectedPerBottle = Number(referenceButton.points) > 0
+    ? Number(settings.defaultBottleCapacity || 100) / Number(referenceButton.points)
     : 0
 
   const canManageBusiness = canDo(currentUser, 'settings')
@@ -274,6 +278,40 @@ export default function Settings() {
     }
   }
 
+  const handleChangePassword = async (event) => {
+    event.preventDefault()
+    if (currentUser?.role !== 'Administrador') return toast.error('Solo el administrador puede cambiar esta contraseña.')
+    if (!passwordForm.current || !passwordForm.next || !passwordForm.confirm) return toast.error('Completa los tres campos.')
+    if (passwordForm.next !== passwordForm.confirm) return toast.error('Las contraseñas nuevas no coinciden.')
+    if (passwordForm.next.length < 8 || passwordForm.next.length > 128) {
+      return toast.error('La contraseña nueva debe tener entre 8 y 128 caracteres.')
+    }
+
+    setChangingPassword(true)
+    const result = await changeOwnPassword({
+      currentPassword: passwordForm.current,
+      newPassword: passwordForm.next,
+    })
+
+    if (!result.success) {
+      toast.error(result.error)
+      setChangingPassword(false)
+      return
+    }
+
+    await writeAuditLog(businessId, {
+      action: 'CHANGE_OWN_PASSWORD',
+      module: AUDIT_MODULES.USERS,
+      currentUser,
+      targetId: currentUser.id,
+      targetName: currentUser.email || 'Cuenta administradora',
+      after: { passwordChanged: true },
+    })
+    setPasswordForm({ current: '', next: '', confirm: '' })
+    setChangingPassword(false)
+    toast.success('Contraseña cambiada correctamente.')
+  }
+
   const accountPanel = (
     <div className="card p-6">
       <div className="font-display font-bold text-slate-100 mb-4">👤 Cuenta y sesión</div>
@@ -296,10 +334,45 @@ export default function Settings() {
     </div>
   )
 
+  const passwordPanel = currentUser?.role === 'Administrador' ? (
+    <div className="card p-6 border border-[#00c4e8]/20">
+      <div className="font-display font-bold text-slate-100 mb-2">🔐 Cambiar contraseña de acceso</div>
+      <div className="text-xs text-slate-500 mb-5">
+        Por seguridad debes confirmar la contraseña actual. Este cambio afecta únicamente tu cuenta de administrador.
+      </div>
+      <form onSubmit={handleChangePassword} className="space-y-4 max-w-xl">
+        <div>
+          <label className="label">Contraseña actual</label>
+          <input className="input" type="password" autoComplete="current-password"
+            value={passwordForm.current}
+            onChange={e => setPasswordForm(form => ({ ...form, current: e.target.value }))} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Contraseña nueva</label>
+            <input className="input" type="password" autoComplete="new-password"
+              value={passwordForm.next}
+              onChange={e => setPasswordForm(form => ({ ...form, next: e.target.value }))} />
+          </div>
+          <div>
+            <label className="label">Repetir contraseña nueva</label>
+            <input className="input" type="password" autoComplete="new-password"
+              value={passwordForm.confirm}
+              onChange={e => setPasswordForm(form => ({ ...form, confirm: e.target.value }))} />
+          </div>
+        </div>
+        <button className="btn-primary text-sm" type="submit" disabled={changingPassword}>
+          {changingPassword ? 'Cambiando contraseña...' : 'Cambiar contraseña'}
+        </button>
+      </form>
+    </div>
+  ) : null
+
   if (!canManageBusiness) {
     return (
       <div className="space-y-5 animate-fade-in max-w-4xl">
         {accountPanel}
+        {passwordPanel}
         <div className="alert-info text-xs">
           Los ajustes del negocio están disponibles únicamente para usuarios con permiso de configuración.
         </div>
@@ -323,6 +396,13 @@ export default function Settings() {
 
       {accountPanel}
 
+      {passwordPanel}
+
+      {currentUser?.role === 'Administrador' && <div className="card p-6 border border-red-500/20">
+        <div className="font-display font-bold text-slate-100 mb-2">Restaurar negocio a cero</div>
+        <p className="text-sm text-slate-400 mb-4">Elimina los datos operativos de todas las sucursales conservando el acceso y la configuración.</p>
+        <ResetBusinessButton businessId={businessId} businessName={settings.businessName} onReset={() => window.location.reload()} />
+      </div>}
       {currentUser?.email?.toLowerCase() === 'test01@gmail.com' && (
         <div className="card p-6 border border-[#a78bfa]/20">
           <div className="font-display font-bold text-slate-100 mb-2">🧪 Datos de demostración</div>
@@ -395,20 +475,19 @@ export default function Settings() {
       <div className="card p-6">
         <div className="font-display font-bold text-slate-100 mb-2">💧 Configuración de Recargas</div>
         <div className="alert-info text-xs mb-5">
-          Define los valores por defecto del sistema de puntos. Estos valores se aplican a nuevos líquidos.
-          Los líquidos existentes pueden tener su propio ajuste individual.
+          Los precios de recarga se aplican a todos los líquidos. El consumo predeterminado se copia a los nuevos líquidos; puedes ajustar su consumo individual en puntos o ml.
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Capacidad por botella (puntos)</label>
-            <input className="input" type="number" value={settings.defaultBottleCapacity || 100} onChange={e => set('defaultBottleCapacity', parseInt(e.target.value))} />
+            <input className="input" type="number" value={settings.defaultBottleCapacity || 100} onChange={e => set('defaultBottleCapacity', Number(e.target.value))} />
             <div className="text-xs text-slate-500 mt-1">Puntos totales de una botella nueva</div>
           </div>
           <div className="bg-[#101c35] rounded-xl p-4 flex items-center">
             <div>
               <div className="text-xs text-slate-400 mb-0.5">Con estos valores, cada botella rinde:</div>
-              <div className="font-display font-bold text-[#00e5a0] text-xl">{expectedPerBottle} recargas</div>
-              <div className="text-xs text-slate-500">de RD$100</div>
+              <div className="font-display font-bold text-[#00e5a0] text-xl">{fmtProjection(expectedPerBottle)} recargas teóricas</div>
+              <div className="text-xs text-slate-500">de RD$ {referenceButton.price}</div>
             </div>
           </div>
         </div>
@@ -429,19 +508,21 @@ export default function Settings() {
                 </div>
                 <div className="col-span-5">
                   <label className="label">Puntos que consume</label>
-                  <input className="input font-mono" type="number" min="1" value={btn.points ?? ''} onChange={e => setRefillButton(index, { points: e.target.value })} />
+                  <input className="input font-mono" type="number" min="0.0001" step="any" value={btn.points ?? ''} onChange={e => setRefillButton(index, { points: e.target.value })} />
                 </div>
                 <button type="button" className="col-span-2 btn-danger text-xs py-2" onClick={() => deleteRefillButton(index)}>Borrar</button>
               </div>
             ))}
           </div>
         </div>
-        <button className="btn-primary mt-5 text-sm" onClick={() => {
+        <button className="btn-primary mt-5 text-sm" onClick={async () => {
           const cleanButtons = refillButtons
             .slice(0, 5)
             .map((b, i) => ({ id: b.id || `r${i}_${Date.now()}`, price: Number(b.price), points: Number(b.points), active: true }))
             .filter(b => b.price > 0 && b.points > 0)
-          if (!cleanButtons.length) return toast.error('Crea al menos un botón válido')
+          if (cleanButtons.length !== refillButtons.length || !cleanButtons.length || cleanButtons.some(b => !Number.isFinite(b.price) || !Number.isFinite(b.points))) return toast.error('Todos los precios y consumos deben ser mayores que cero')
+          if (new Set(cleanButtons.map(b => b.price)).size !== cleanButtons.length) return toast.error('Los precios de recarga no pueden repetirse')
+          if (!(Number(settings.defaultBottleCapacity || 100) > 0) || cleanButtons.some(b => b.points > Number(settings.defaultBottleCapacity || 100))) return toast.error('El consumo no puede superar la capacidad de la botella')
           const nextSettings = {
             ...settings,
             refillButtons: cleanButtons,
@@ -449,9 +530,9 @@ export default function Settings() {
             defaultPointsR100: cleanButtons.find(b => b.price === 100)?.points || settings.defaultPointsR100 || 20,
             defaultPointsR150: cleanButtons.find(b => b.price === 150)?.points || settings.defaultPointsR150 || 30,
           }
+          if (businessId && !(await saveBusinessSettings(businessId, nextSettings, state.branchId))) return toast.error('No se pudo guardar la configuración de recargas')
           setSettings(nextSettings)
           dispatch({ type: 'UPDATE_SETTINGS', payload: nextSettings })
-          saveBusinessSettings(businessId, nextSettings).catch(() => {})
           toast.success('Configuración de recargas guardada')
         }}>Guardar Configuración de Recargas</button>
       </div>

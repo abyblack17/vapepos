@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, lazy, Suspense } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
@@ -9,26 +9,31 @@ import Sidebar from './components/layout/Sidebar'
 import TopBar from './components/layout/TopBar'
 import { useApp } from './contexts/AppContext'
 
-import Dashboard from './pages/Dashboard'
-import POS from './pages/POS'
-import Cart from './pages/Cart'
-import Refills from './pages/Refills'
-import Inventory from './pages/Inventory'
-import Purchases from './pages/Purchases'
-import Customers from './pages/Customers'
-import Suppliers from './pages/Suppliers'
-import Reports from './pages/Reports'
-import SalesHistory from './pages/SalesHistory'
-import Cash from './pages/Cash'
-import Users from './pages/Users'
-import Settings from './pages/Settings'
-import Fiscal from './pages/Fiscal'
-import Suggestions from './pages/Suggestions'
-import Insights from './pages/Insights'
-import Branches from './pages/Branches'
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const POS = lazy(() => import('./pages/POS'))
+const Cart = lazy(() => import('./pages/Cart'))
+const Refills = lazy(() => import('./pages/Refills'))
+const Inventory = lazy(() => import('./pages/Inventory'))
+const Purchases = lazy(() => import('./pages/Purchases'))
+const Customers = lazy(() => import('./pages/Customers'))
+const Suppliers = lazy(() => import('./pages/Suppliers'))
+const Reports = lazy(() => import('./pages/Reports'))
+const SalesHistory = lazy(() => import('./pages/SalesHistory'))
+const Cash = lazy(() => import('./pages/Cash'))
+const Users = lazy(() => import('./pages/Users'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Fiscal = lazy(() => import('./pages/Fiscal'))
+const Suggestions = lazy(() => import('./pages/Suggestions'))
+const Insights = lazy(() => import('./pages/Insights'))
+const Branches = lazy(() => import('./pages/Branches'))
 import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
-import SuperAdmin from './pages/SuperAdmin'
+import TrialReminder from './components/common/TrialReminder'
+const SuperAdmin = lazy(() => import('./pages/SuperAdmin'))
+import SyncStatus from './components/common/SyncStatus'
+import PurchaseOptions from './components/common/PurchaseOptions'
+import useBusinessActivity from './hooks/useBusinessActivity'
+import { TRIAL_MESSAGE, trialExpired } from './config/trial'
 
 const MOBILE_NAV_ITEMS = [
   { id: 'dashboard', icon: '◈', label: 'Inicio' },
@@ -59,7 +64,8 @@ const PAGE_COMPONENTS = {
   branches:    Branches,
 }
 
-function AppShell() {
+export function AppShell() {
+  const { business, isSupport } = useAuth()
   const { currentPage, navigate } = useNavigation()
   const { state } = useApp()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -70,12 +76,16 @@ function AppShell() {
     setSidebarOpen(false)
   }
 
+  if (business?.resetInProgress) return <div className="min-h-screen flex items-center justify-center text-slate-300 bg-[#080d18]">El negocio se está restaurando. Espera a que termine.</div>
+  if (state.dataError && !state.dataLoaded) return <div className="min-h-screen flex flex-col gap-4 items-center justify-center p-6 text-slate-300 bg-[#080d18]"><p>{state.dataError}</p><SyncStatus /><button className="btn-secondary" onClick={() => window.location.reload()}>Reintentar</button></div>
+  if (state.loading || !state.dataLoaded) return <div className="min-h-screen flex items-center justify-center text-slate-300 bg-[#080d18]">Cargando los datos del negocio…</div>
+
   if (branchesEnabled && !loadingBranches && branches.length === 0) {
     return <div className="min-h-screen bg-[#080d18] flex items-center justify-center p-5"><div className="card p-6 max-w-md text-center"><div className="text-4xl mb-3">📍</div><h2 className="font-display text-xl font-bold text-slate-100">Sin sucursal asignada</h2><p className="text-sm text-slate-400 mt-2">Un Administrador debe asignarte a una sucursal antes de que puedas usar VapePos.</p></div></div>
   }
 
   return (
-    <div className="app-shell flex h-screen overflow-hidden bg-[#080d18]" style={{height: '100dvh'}}>
+    <div className="app-shell flex h-screen overflow-hidden bg-[#080d18]" style={{height: isSupport ? '100%' : '100dvh'}}>
 
       {/* Overlay oscuro en movil cuando sidebar esta abierto */}
       {sidebarOpen && (
@@ -100,9 +110,10 @@ function AppShell() {
           currentPage={currentPage}
           onMenuClick={() => setSidebarOpen(!sidebarOpen)}
         />
+        {!isSupport && <SyncStatus />}
         <main className={`app-main flex-1 overflow-y-auto overscroll-contain ${currentPage === 'pos' ? 'p-3 md:p-4' : 'p-3 md:p-5'}`}
           style={{paddingBottom: 'max(84px, env(safe-area-inset-bottom))'}}>
-          <PageComponent />
+          <Suspense fallback={<div className="p-5 text-slate-400">Cargando módulo…</div>}><PageComponent /></Suspense>
         </main>
 
 
@@ -130,7 +141,8 @@ function AppShell() {
 }
 
 function AuthGate() {
-  const { isAuthenticated, loading, userProfile } = useAuth()
+  useBusinessActivity()
+  const { isAuthenticated, loading, userProfile, business, logout, accessNow } = useAuth()
   const [authView, setAuthView] = useState('login')
 
   if (loading) {
@@ -151,13 +163,16 @@ function AuthGate() {
   }
 
   if (userProfile?.role === 'superadmin') {
-    return <SuperAdmin />
+    return <Suspense fallback={<div className="p-5 text-slate-400">Cargando administración…</div>}><SuperAdmin /></Suspense>
   }
+
+  if (trialExpired(business, accessNow)) return <div className="min-h-screen bg-[#080d18] flex items-center justify-center p-4"><div className="card p-6 max-w-lg w-full space-y-5"><h1 className="text-xl font-bold text-slate-100">Tu prueba ha concluido</h1><p className="text-slate-300">{TRIAL_MESSAGE}</p><PurchaseOptions /><p className="text-sm text-slate-400">Tus datos se conservan. Soporte habilitará el acceso después de verificar tu compra.</p><button className="btn-secondary w-full" onClick={logout}>Cerrar sesión</button></div></div>
 
   return (
     <BranchProvider>
       <AppProvider>
         <AppShell />
+        <TrialReminder business={business} now={accessNow} />
       </AppProvider>
     </BranchProvider>
   )

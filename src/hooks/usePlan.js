@@ -6,25 +6,26 @@ import { useMemo } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useApp }  from '../contexts/AppContext'
 import { PLANS }   from '../config/plans'
+import { timestampMillis } from '../config/trial'
 
 export function usePlan() {
-  const { business }   = useAuth()
+  const { business, accessNow }   = useAuth()
   const { state }      = useApp()
 
   // ── Determinar si es trial o plan de pago ────────────────
-  const isTrial = business?.trialUsed === true && business?.trialStartedAt != null
+  const isTrial = business?.licenseType === 'trial' || (business?.licenseType !== 'permanent' && business?.trialUsed === true && business?.trialStartedAt != null)
 
   // ── Días restantes ───────────────────────────────────────
   const daysLeft = useMemo(() => {
     if (!business?.planExpiresAt) return null
-    const expires = business.planExpiresAt?.toDate?.() || new Date(business.planExpiresAt)
-    return Math.ceil((expires - new Date()) / (1000 * 60 * 60 * 24))
-  }, [business])
+    const expires = new Date(timestampMillis(business.planExpiresAt))
+    return Math.ceil((expires - accessNow) / (1000 * 60 * 60 * 24))
+  }, [business, accessNow])
 
   // ── Período de gracia ────────────────────────────────────
   // Trial: sin gracia (al vencer baja inmediatamente)
   // Pago:  1 día de gracia
-  const GRACE_DAYS = isTrial ? 0 : 1
+  const GRACE_DAYS = 0
 
   // ── Plan activo ──────────────────────────────────────────
   const planKey = useMemo(() => {
@@ -33,13 +34,13 @@ export function usePlan() {
     if (plan !== 'pro') return 'basic'
 
     if (business.planExpiresAt) {
-      const expires = business.planExpiresAt?.toDate?.() || new Date(business.planExpiresAt)
-      const diffDays = Math.ceil((new Date() - expires) / (1000 * 60 * 60 * 24))
+      const expires = new Date(timestampMillis(business.planExpiresAt))
+      const diffDays = accessNow >= expires.getTime() ? 1 : 0
       // Vencido y sin gracia restante → básico
       if (diffDays > GRACE_DAYS) return 'basic'
     }
     return 'pro'
-  }, [business, GRACE_DAYS])
+  }, [business, GRACE_DAYS, accessNow])
 
   const plan    = PLANS[planKey] || PLANS.basic
   const isPro   = planKey === 'pro'
@@ -47,13 +48,7 @@ export function usePlan() {
 
   // ── En período de gracia ─────────────────────────────────
   // Solo aplica a planes de pago (no trial), cuando venció hace <= 1 día
-  const inGrace = useMemo(() => {
-    if (isTrial) return false              // trial no tiene gracia
-    if (!business?.planExpiresAt) return false
-    const expires = business.planExpiresAt?.toDate?.() || new Date(business.planExpiresAt)
-    const diffDays = Math.ceil((new Date() - expires) / (1000 * 60 * 60 * 24))
-    return diffDays >= 0 && diffDays <= GRACE_DAYS
-  }, [business, isTrial, GRACE_DAYS])
+  const inGrace = false // Pro vence sin bloquear el acceso comprado a la plataforma.
 
   // ── Prueba gratuita ──────────────────────────────────────
   const trialUsed = business?.trialUsed === true

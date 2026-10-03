@@ -35,11 +35,10 @@ const PAYMENT_INFO = [
 export default function UpgradeModal({ onClose }) {
   const { businessId, business, currentUser } = useAuth()
   const { state }       = useApp()
-  const { trialUsed, isPro } = usePlan()
+  const { isPro } = usePlan()
 
   const [step, setStep]               = useState(1)
   const [uploading, setUploading]     = useState(false)
-  const [activating, setActivating]   = useState(false)
   const [file, setFile]               = useState(null)
   const [preview, setPreview]         = useState(null)
   const [notes, setNotes]             = useState('')
@@ -62,27 +61,6 @@ export default function UpgradeModal({ onClose }) {
     reader.readAsDataURL(f)
   }
 
-  // ── Activar prueba gratuita de 30 días — via Cloud Function ──
-  const handleActivateTrial = async () => {
-    if (trialUsed) { toast.error('Ya usaste tu prueba gratuita'); return }
-    setActivating(true)
-    try {
-      const fns = getFunctions()
-      const fn  = httpsCallable(fns, 'activateTrial')
-      const result = await fn()
-
-      if (!result.data?.success) {
-        throw new Error('Error al activar la prueba')
-      }
-
-      setStep(4)
-      setTimeout(() => window.location.reload(), 2500)
-    } catch (err) {
-      toast.error('Error al activar la prueba: ' + err.message)
-    } finally {
-      setActivating(false)
-    }
-  }
   // ── Enviar comprobante ───────────────────────────────────────
   const handleSubmit = async () => {
     if (!file) { toast.error('Sube el comprobante de pago'); return }
@@ -125,7 +103,7 @@ export default function UpgradeModal({ onClose }) {
                 <span className="text-2xl">⚡</span>
                 <div>
                   <div className="font-display font-bold text-[#00e5a0] text-lg">Plan Pro</div>
-                  <div className="text-xs text-slate-400">Todo ilimitado · Sin restricciones</div>
+                  <div className="text-xs text-slate-400">Más capacidad y acompañamiento</div>
                 </div>
               </div>
               <div className="text-right">
@@ -144,36 +122,17 @@ export default function UpgradeModal({ onClose }) {
                 '✓ Backup y restauración',
                 '✓ Proveedores',
                 '✓ Rendimiento líquidos',
-                '✓ Sucursales (próximo)',
+                '✓ Gestión de sucursales',
+                '✓ Soporte y actualizaciones',
               ].map((f, i) => <div key={i}>{f}</div>)}
             </div>
           </div>
 
-          {/* Prueba gratuita */}
-          {!trialUsed && !isPro && (
-            <div className="bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="text-lg">🎁</span>
-                <div className="font-semibold text-[#a78bfa] text-sm">Prueba gratuita — 30 días</div>
-              </div>
-              <div className="text-xs text-slate-400 mb-3">
-                Activa el plan Pro gratis por 30 días, sin necesidad de pagar.
-                Esta oferta es válida <strong className="text-slate-300">una única vez</strong> por negocio.
-              </div>
-              <button
-                onClick={handleActivateTrial}
-                disabled={activating}
-                className="w-full py-2.5 rounded-xl font-bold text-sm bg-[#8b5cf6]/20 border border-[#8b5cf6]/30 text-[#a78bfa] hover:bg-[#8b5cf6]/30 transition-all disabled:opacity-60"
-              >
-                {activating ? 'Activando...' : '🎁 Activar 30 días gratis'}
-              </button>
-            </div>
-          )}
 
-          {trialUsed && !isPro && (
+          {!isPro && (
             <div className="bg-slate-700/20 border border-white/10 rounded-xl p-3 text-center">
-              <div className="text-xs text-slate-400">Ya utilizaste tu prueba gratuita.</div>
-              <div className="text-xs text-slate-500 mt-0.5">Para continuar con el plan Pro realiza el pago.</div>
+              <div className="text-xs text-slate-400">Pro es un servicio opcional de acompañamiento: RD$600 al mes.</div>
+              <div className="text-xs text-slate-500 mt-0.5">Tu compra mantiene el acceso de por vida en Básico. Los datos existentes no se eliminan al vencer Pro.</div>
             </div>
           )}
 
@@ -317,22 +276,6 @@ export default function UpgradeModal({ onClose }) {
         </div>
       )}
 
-      {/* ── Paso 4: Prueba activada ── */}
-      {step === 4 && (
-        <div className="text-center space-y-4 py-6">
-          <div className="text-5xl">🎉</div>
-          <div>
-            <div className="font-display font-bold text-slate-100 text-lg mb-2">¡Prueba activada!</div>
-            <div className="text-slate-400 text-sm leading-relaxed">
-              Tienes <span className="text-[#00e5a0] font-bold">30 días</span> de plan Pro completamente gratis.
-              La página se actualizará en un momento.
-            </div>
-          </div>
-          <div className="bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 rounded-xl p-3 text-xs text-[#a78bfa]">
-            Recuerda renovar antes de que venza para no perder acceso a tus datos.
-          </div>
-        </div>
-      )}
 
     </Modal>
   )

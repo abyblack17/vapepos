@@ -2,7 +2,7 @@
   "name": "vapepos",
   "productName": "VapePos",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.4",
   "description": "Sistema POS para tiendas de vape",
   "author": "Polanco Tech",
   "main": "electron/main.cjs",
@@ -11,6 +11,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:offline": "npm --prefix functions run build && node --test tests/offline-backend.test.cjs",
+    "test:desktop-storage": "electron tests/desktop-storage.cjs write && electron tests/desktop-storage.cjs read && electron tests/desktop-storage.cjs sync",
     "deploy": "npm run build && firebase deploy --only hosting",
     "desktop:dev": "npm run build && electron .",
     "desktop:build": "npm run build && electron-builder --win nsis --x64",
@@ -20,7 +22,11 @@
     "@capacitor/android": "^8.3.4",
     "@capacitor/core": "^8.3.4",
     "date-fns": "^3.2.0",
+    "electron-updater": "^6.6.2",
     "firebase": "^12.19.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.303.0",
     "pako": "^2.1.0",
     "react": "^18.2.0",
@@ -28,7 +34,7 @@
     "react-hot-toast": "^2.4.1",
     "react-router-dom": "^7.18.4",
     "recharts": "^3.10.1",
-    "electron-updater": "^6.6.2"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
@@ -61,7 +67,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "resources/icon_1024.png",
@@ -69,6 +77,9 @@
       "artifactName": "VapePos-Setup-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "include": "resources/installer.nsh",
+      "perMachine": true,
+      "packElevateHelper": true,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useNavigation } from '../contexts/NavigationContext'
 import StatCard from '../components/ui/StatCard'
@@ -6,8 +6,7 @@ import UpgradeModal from '../components/ui/UpgradeModal'
 import { fmt, today } from '../utils/helpers'
 import { computeDailySummary, getTopProducts, getWeeklyChartData } from '../services/salesService'
 import { usePlan } from '../hooks/usePlan'
-import { db } from '../config/firebase'
-import { collection, getDocs, query, where as fbWhere } from 'firebase/firestore'
+import { useAnnouncements } from '../hooks/useAnnouncements'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
@@ -29,17 +28,11 @@ export default function Dashboard() {
   const { navigate } = useNavigation()
   const { isPro, isBasic, daysLeft, inGrace, usage, counts } = usePlan()
   const { sales, products, liquids, alerts, cashSession } = state
-  const [announcements, setAnnouncements] = useState([])
+  const { announcements, error: announcementsError } = useAnnouncements()
   const [showUpgrade, setShowUpgrade]     = useState(false)
 
   const canViewProfit = state.currentUser?.role === 'Administrador' ||
     (state.currentUser?.permissions?.viewProfit ?? false)
-
-  useEffect(() => {
-    getDocs(query(collection(db, 'system_announcements'), fbWhere('active', '==', true)))
-      .then(snap => setAnnouncements(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
-      .catch(() => {})
-  }, [])
 
   const summary      = computeDailySummary(sales)
   const topProducts  = getTopProducts(sales)
@@ -129,14 +122,17 @@ export default function Dashboard() {
       )}
 
       {/* Anuncios del sistema */}
+      {announcementsError && <div className="alert-danger text-xs">{announcementsError}</div>}
       {announcements.map(a => (
-        <div key={a.id} className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${ANN_STYLES[a.type] || ANN_STYLES.info}`}>
+        <button key={a.id} type="button" onClick={() => navigate('insights')}
+          className={`w-full text-left flex items-center gap-3 rounded-xl border px-4 py-3 ${ANN_STYLES[a.type] || ANN_STYLES.info}`}>
           <span className="text-lg shrink-0">{ANN_ICON[a.type] || '📢'}</span>
-          <div>
-            <div className="font-semibold text-sm">{a.title}</div>
-            <div className="text-xs opacity-80 mt-0.5">{a.message}</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase tracking-wider opacity-70">Nuevo anuncio</div>
+            <div className="font-semibold text-sm truncate">{a.title}</div>
           </div>
-        </div>
+          <span className="text-xs font-semibold whitespace-nowrap">Leer en Acciones →</span>
+        </button>
       ))}
 
       {/* Stat cards */}

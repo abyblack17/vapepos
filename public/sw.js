@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vapepos-v2.8-branches-complete'
+const CACHE_NAME = 'vapepos-offline-v1'
 
 const STATIC_ASSETS = [
   '/',
@@ -11,10 +11,16 @@ const STATIC_ASSETS = [
 // Instalar y tomar control inmediatamente
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await cache.addAll(STATIC_ASSETS)
+      const html = await (await cache.match('/index.html')).text()
+      const bundled = await (await fetch('/offline-assets.json', { cache: 'no-store' })).json()
+      const assets = [...bundled.map(name => `/${name}`), ...[...html.matchAll(/(?:src|href)="(\/assets\/[^"\s]+)"/g)].map(match => match[1])]
+      await cache.addAll([...new Set(assets)])
+    })
   )
   // Forzar activacion sin esperar a que cierren las pestanas
-  self.skipWaiting()
+  // Activate when the running checkout is closed.
 })
 
 // Activar, limpiar caches viejos y tomar control de todos los clientes
@@ -23,7 +29,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) =>
       Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => name.startsWith('vapepos-') && name !== CACHE_NAME && !name.startsWith('vapepos-offline-'))
           .map((name) => caches.delete(name))
       )
     ).then(() => {
@@ -36,28 +42,19 @@ self.addEventListener('activate', (event) => {
 // Estrategia: Network first para HTML, cache first para assets
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
-
-  // Firebase y APIs — siempre red
-  if (
-    url.hostname.includes('firebase') ||
-    url.hostname.includes('googleapis') ||
-    url.hostname.includes('firebaseio') ||
-    url.hostname.includes('firebasestorage') ||
-    url.hostname.includes('fonts.g')
-  ) {
-    return
-  }
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname === '/sw.js') return
 
   // HTML — siempre red primero para detectar updates
   if (event.request.destination === 'document') {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { signal: AbortSignal.timeout(2500) })
         .then((response) => {
+          if (!response.ok) throw new Error('No se pudo cargar la aplicación')
           const clone = response.clone()
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone))
           return response
         })
-        .catch(() => caches.match('/index.html'))
+        .catch(() => caches.open(CACHE_NAME).then(cache => cache.match('/index.html')))
     )
     return
   }
@@ -65,7 +62,7 @@ self.addEventListener('fetch', (event) => {
   // Código y estilos — red primero para recibir cada deploy inmediatamente.
   if (event.request.destination === 'script' || event.request.destination === 'style') {
     event.respondWith(
-      fetch(event.request)
+      caches.match(event.request).then(cached => cached || fetch(event.request))
         .then((response) => {
           if (response && response.status === 200) {
             const clone = response.clone()

@@ -1,12 +1,16 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useApp } from '../contexts/AppContext'
 import { useNavigation } from '../contexts/NavigationContext'
 import { fmt, today } from '../utils/helpers'
+import { useAnnouncements } from '../hooks/useAnnouncements'
+import toast from 'react-hot-toast'
 
 export default function Insights() {
   const { state }    = useApp()
   const { navigate } = useNavigation()
   const { products, customers, sales, liquids } = state
+  const { announcements, loading: loadingAnnouncements, error: announcementsError, markAsSeen } = useAnnouncements()
+  const [markingSeenId, setMarkingSeenId] = useState(null)
 
   const todayStr = today()
 
@@ -113,6 +117,26 @@ export default function Insights() {
     success: { card: 'bg-[#00e5a0]/5 border-[#00e5a0]/20', icon: 'bg-[#00e5a0]/10',  text: 'text-[#00e5a0]',  badge: 'Bien'       },
   }
 
+  const announcementStyles = {
+    info:    'bg-[#00c4e8]/5 border-[#00c4e8]/20 text-[#00c4e8]',
+    success: 'bg-[#00e5a0]/5 border-[#00e5a0]/20 text-[#00e5a0]',
+    warning: 'bg-amber-500/5 border-amber-500/20 text-amber-400',
+    update:  'bg-[#8b5cf6]/5 border-[#8b5cf6]/20 text-[#a78bfa]',
+  }
+  const announcementIcons = { info: '💡', success: '✅', warning: '⚠️', update: '🚀' }
+
+  const handleSeen = async announcementId => {
+    setMarkingSeenId(announcementId)
+    try {
+      await markAsSeen(announcementId)
+      toast.success('Anuncio marcado como visto para este negocio.')
+    } catch (error) {
+      toast.error(error?.message || 'No se pudo marcar el anuncio como visto.')
+    } finally {
+      setMarkingSeenId(null)
+    }
+  }
+
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -125,11 +149,44 @@ export default function Insights() {
             ? 'bg-[#00e5a0]/10 text-[#00e5a0]'
             : 'bg-amber-500/10 text-amber-400'
         }`}>
-          {insights.length === 0 ? '✓ Todo en orden' : `${insights.length} acciones pendientes`}
+          {insights.length + announcements.length === 0 ? '✓ Todo en orden' : `${insights.length + announcements.length} acciones pendientes`}
         </div>
       </div>
 
-      {insights.length === 0 ? (
+      {(loadingAnnouncements || announcementsError || announcements.length > 0) && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-display font-bold text-slate-100">📢 Anuncios de VapePos</div>
+              <div className="text-xs text-slate-500 mt-0.5">Lee el anuncio completo y márcalo como visto cuando termines.</div>
+            </div>
+            {announcements.length > 0 && <span className="badge badge-amber">{announcements.length} pendiente{announcements.length !== 1 ? 's' : ''}</span>}
+          </div>
+          {loadingAnnouncements && <div className="card p-4 text-sm text-slate-500 animate-pulse">Cargando anuncios...</div>}
+          {announcementsError && <div className="alert-danger text-xs">{announcementsError}</div>}
+          {announcements.map(announcement => {
+            const style = announcementStyles[announcement.type] || announcementStyles.info
+            return (
+              <div key={announcement.id} className={`card border p-5 ${style}`}>
+                <div className="flex items-start gap-4">
+                  <div className="text-2xl shrink-0">{announcementIcons[announcement.type] || '📢'}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-base">{announcement.title}</div>
+                    <div className="text-sm text-slate-300 mt-2 whitespace-pre-wrap leading-relaxed">{announcement.message}</div>
+                    <button type="button" onClick={() => handleSeen(announcement.id)}
+                      disabled={markingSeenId === announcement.id}
+                      className="mt-4 px-4 py-2 rounded-lg bg-white/10 border border-current/20 text-xs font-semibold hover:bg-white/15 disabled:opacity-50 transition-all">
+                      {markingSeenId === announcement.id ? 'Guardando...' : '✓ Marcar como visto'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </section>
+      )}
+
+      {insights.length === 0 && announcements.length === 0 ? (
         <div className="card p-12 text-center space-y-3">
           <div className="text-5xl">🎉</div>
           <div className="font-display font-bold text-slate-200 text-lg">Todo esta bajo control</div>

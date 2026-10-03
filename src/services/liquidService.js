@@ -26,7 +26,8 @@ export function getActiveTotalCapacity(liquid) {
 
 export function canRefill(liquid, refillType, settings = null) {
   if (!liquid.hasActive) return false
-  return toNum(liquid.activeSaldo, 0) >= getPointsForType(liquid, refillType, settings)
+  const points = getPointsForType(liquid, refillType, settings)
+  return points > 0 && toNum(liquid.activeSaldo, 0) >= points
 }
 
 export const DEFAULT_REFILL_BUTTONS = [
@@ -57,14 +58,37 @@ export function getRefillButtons(settings = {}) {
 
 export function getPointsForType(liquid, refillType, settings = null) {
   const price = toNum(String(refillType).replace('RD$', ''), 0)
-  const fromSettings = settings && Array.isArray(settings.refillButtons)
-    ? getRefillButtons(settings).find(b => b.price === price)
-    : null
-  if (fromSettings) return fromSettings.points
-  if (price === 50)  return toNum(liquid?.pointsR50, 10)
-  if (price === 100) return toNum(liquid?.pointsR100, 20)
-  if (price === 150) return toNum(liquid?.pointsR150, 30)
-  return toNum(liquid?.pointsR100, 20)
+  const button = getRefillButtons(settings).find(b => b.price === price)
+  // Prices belong to Settings. A liquid stores consumption only, keyed by price.
+  if (settings && !button) return 0
+  const custom = liquid?.refillConsumption?.[String(price)]
+  if (custom != null && Number.isFinite(Number(custom)) && Number(custom) > 0) return Number(custom)
+  const legacy = liquid?.['pointsR' + price]
+  if (legacy != null && Number.isFinite(Number(legacy)) && Number(legacy) > 0) return Number(legacy)
+  return button?.points || 0
+}
+
+export function getRefillProjections(liquid, settings = null) {
+  const capacity = toNum(liquid?.activeCapacity)
+  const cost = toNum(liquid?.costPerBottle)
+  return getRefillButtons(settings).map(button => {
+    const points = getPointsForType(liquid, button.price, settings)
+    const expected = capacity > 0 && points > 0 ? capacity / points : 0
+    const costPerRefill = capacity > 0 ? cost * points / capacity : 0
+    const revenue = expected * button.price
+    return { price: button.price, points, expected, complete: Math.floor(expected + 1e-10),
+      remaining: Math.max(0, capacity - Math.floor(expected + 1e-10) * points),
+      cost: costPerRefill, profit: button.price - costPerRefill,
+      revenue, benefit: expected > 0 ? revenue - cost : 0 }
+  })
+}
+
+export function fmtProjection(value) {
+  return Number(value || 0).toLocaleString('es-DO', { maximumFractionDigits: 4 })
+}
+
+export function fmtLiquidMoney(value) {
+  return 'RD$' + Number(value || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /**
@@ -73,7 +97,7 @@ export function getPointsForType(liquid, refillType, settings = null) {
 export function getExpectedRecharges(liquid, priceType = 100, settings = null) {
   const pts = getPointsForType(liquid, priceType, settings)
   if (!pts) return 0
-  return Math.floor(toNum(liquid.activeCapacity, 0) / pts)
+  return Math.max(0, toNum(liquid.activeCapacity, 0)) / pts
 }
 
 /**
@@ -130,7 +154,7 @@ export function detectLoss(liquid) {
 
 export function buildRefillCartItem(liquid, refillPrice, settings = null) {
   const points = getPointsForType(liquid, refillPrice, settings)
-  if (!canRefill(liquid, refillPrice, settings)) {
+  if (!(points > 0) || !canRefill(liquid, refillPrice, settings)) {
     throw new Error(`Saldo insuficiente en "${liquid.name}". Necesita ${points} pts, disponible: ${liquid.activeSaldo}`)
   }
   return {
@@ -140,7 +164,7 @@ export function buildRefillCartItem(liquid, refillPrice, settings = null) {
     liquidId:   liquid.id,
     liquidName: liquid.name,
     price:      refillPrice,
-    cost:       getCostPerRefill(liquid, refillPrice),
+    cost:       getCostPerRefill(liquid, refillPrice, settings),
     points,
     qty:        1,
     taxIncluded: liquid.taxIncluded === true,
@@ -157,30 +181,32 @@ export function buildRefillCartItem(liquid, refillPrice, settings = null) {
  *   - Ganancia total potencial: 10 * 67.5 = RD$675
  *   - ROI potencial: (675/325) * 100 = 207%
  */
-export function getRendimientoReport(liquid, refillSales = []) {
-  const expectedR100     = getExpectedRecharges(liquid, 100)
-  const expectedR50      = getExpectedRecharges(liquid, 50)
-  const expectedR150     = getExpectedRecharges(liquid, 150)
+export function getRendimientoReport(liquid, refillSales = [], settings = null) {
+  const expectedR100     = getExpectedRecharges(liquid, 100, settings)
+  const expectedR50      = getExpectedRecharges(liquid, 50, settings)
+  const expectedR150     = getExpectedRecharges(liquid, 150, settings)
   const realRecharges    = liquid.totalRechargesAllTime || 0
-  const costPerR100      = getCostPerRefill(liquid, 100)
-  const costPerR50       = getCostPerRefill(liquid, 50)
-  const costPerR150      = getCostPerRefill(liquid, 150)
-  const profitPerR100    = getProfitPerRefill(liquid, 100)
-  const profitPerR50     = getProfitPerRefill(liquid, 50)
-  const profitPerR150    = getProfitPerRefill(liquid, 150)
+  const costPerR100      = getCostPerRefill(liquid, 100, settings)
+  const costPerR50       = getCostPerRefill(liquid, 50, settings)
+  const costPerR150      = getCostPerRefill(liquid, 150, settings)
+  const profitPerR100    = getProfitPerRefill(liquid, 100, settings)
+  const profitPerR50     = getProfitPerRefill(liquid, 50, settings)
+  const profitPerR150    = getProfitPerRefill(liquid, 150, settings)
   const bottlesOpened    = Math.max(1, toNum(liquid.totalOpenedBottles, liquid.hasActive ? 1 : 0))
-  const totalPotential   = getTotalPotentialProfit(liquid, 100) * bottlesOpened
+  const totalPotential   = getTotalPotentialProfit(liquid, 100, settings)
 
   // Ganancia real = ingresos reales - costo real de cada recarga según su tipo
   const totalEarned      = liquid.totalRevenueAllTime || 0
   const liquidSales      = refillSales.filter(r => r.liquidId === liquid.id)
   const realCostConsumed = liquidSales.length > 0
-    ? liquidSales.reduce((acc, r) => acc + getCostPerRefill(liquid, r.price || 100), 0)
+    ? liquidSales.reduce((acc, r) => acc + (r.cost != null && Number.isFinite(Number(r.cost))
+      ? Number(r.cost)
+      : (r.pointsConsumed != null ? getCostPerPoint(liquid) * toNum(r.pointsConsumed) : getCostPerRefill(liquid, r.price || 100, settings))), 0)
     : realRecharges * costPerR100
   const realNetProfit    = totalEarned - realCostConsumed
 
   // ROI potencial sobre la botella completa
-  const totalInvested = toNum(liquid.costPerBottle) * bottlesOpened
+  const totalInvested = toNum(liquid.costPerBottle)
   const roiPotential = totalInvested
     ? Math.round((totalPotential / totalInvested) * 100)
     : 0

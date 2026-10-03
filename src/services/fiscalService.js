@@ -35,6 +35,8 @@ export async function issueNCF(businessId, sequences, typeCode) {
 
   const ref = doc(db, 'businesses', businessId, 'ncfSequences', local.id)
   const result = await runTransaction(db, async (tx) => {
+    const business = await tx.get(doc(db, 'businesses', businessId))
+    if (business.data()?.resetInProgress) throw new Error('El negocio se está restaurando.')
     const snap = await tx.get(ref)
     if (!snap.exists()) throw new Error(`La secuencia ${typeCode} no existe en Firestore`)
     const seq = { id: snap.id, ...snap.data() }
@@ -44,6 +46,7 @@ export async function issueNCF(businessId, sequences, typeCode) {
     const nextNumber = usedNumber + 1
     const ncf = buildNCF(seq.prefix || seq.typeCode, usedNumber)
     tx.update(ref, {
+      dataEpoch: business.data()?.dataEpoch || 0,
       nextNumber,
       updatedAt: serverTimestamp(),
     })

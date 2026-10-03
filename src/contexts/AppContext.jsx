@@ -5,9 +5,12 @@ import { bizGetAll, getBusinessSettings } from '../services/firestoreService'
 import { useFirestoreSync } from '../hooks/useFirestoreSync'
 import { DEFAULT_REFILL_BUTTONS } from '../services/liquidService'
 import { useBranches } from './BranchContext'
+import { readLocal, writeLocal, listOperations } from '../services/offlineStore'
+import { getSyncStatus, setOfflineProjection } from '../services/offlineSync'
+import { withLoadDeadline } from '../services/syncRecovery'
 
 // ── Estado inicial vacío ──────────────────────────────────────
-function getInitialState() {
+export function getInitialState() {
   return {
     products:        [],
     liquids:         [],
@@ -42,7 +45,7 @@ function getInitialState() {
   }
 }
 
-const AppContext = createContext(null)
+export const AppContext = createContext(null)
 
 
 function saleDateValue(sale = {}) {
@@ -51,7 +54,7 @@ function saleDateValue(sale = {}) {
   return Number.isFinite(value) ? value : 0
 }
 
-function recalculateCustomerLoyalty(customers = [], sales = []) {
+export function recalculateCustomerLoyalty(customers = [], sales = []) {
   const stats = new Map()
   const orderedSales = [...sales]
     .filter(s => s && s.customerId)
@@ -128,7 +131,9 @@ function recalcCashSales(cashSession = {}) {
 export function reducer(state, action) {
   switch (action.type) {
     case 'SET_LOADING':     return { ...state, loading: action.payload }
+    case 'START_DATA_LOAD': return { ...action.payload, dataLoaded: false, loading: true, dataError: null }
     case 'SET_DATA_LOADED': return { ...state, dataLoaded: true, loading: false }
+    case 'SET_DATA_ERROR': return { ...state, loading: false, dataError: action.payload }
     case 'LOAD_ALL':        return { ...state, ...action.payload, loading: false, dataLoaded: true }
 
     // Products
@@ -275,8 +280,8 @@ export function reducer(state, action) {
       let updatedProducts = state.products
       if (saleToDelete.items?.length) {
         updatedProducts = state.products.map(p => {
-          const soldItem = saleToDelete.items.find(i => i.productId === p.id)
-          if (soldItem) return { ...p, stock: p.stock + soldItem.qty }
+          const qty = saleToDelete.items.filter(i => i.productId === p.id).reduce((sum, item) => sum + Number(item.qty || 1), 0)
+          if (qty) return { ...p, stock: Number(p.stock || 0) + qty }
           return p
         })
       }
@@ -291,18 +296,28 @@ export function reducer(state, action) {
             if (r.liquidId === l.id) {
               liq = {
                 ...liq,
-                activeSaldo:           Math.min(liq.activeCapacity, liq.activeSaldo + (r.pointsConsumed || 0)),
+                activeSaldo:           Number(liq.activeSaldo || 0) + Number(r.pointsConsumed || 0),
+                hasActive:             Number(liq.activeSaldo || 0) + Number(r.pointsConsumed || 0) > 0,
+                totalPointsConsumedAllTime: Math.max(0, Number(liq.totalPointsConsumedAllTime || 0) - Number(r.pointsConsumed || 0)),
                 totalRechargesAllTime: Math.max(0, liq.totalRechargesAllTime - 1),
                 totalRevenueAllTime:   Math.max(0, liq.totalRevenueAllTime - r.price),
               }
             }
           })
           // Revert bottle sales
-          saleToDelete.bottleSales?.forEach(b => {
-            if (b.liquidId === l.id) {
-              liq = { ...liq, closedBottles: liq.closedBottles + (b.qty || 1) }
-            }
-          })
+          const bottleLines = (saleToDelete.bottleSales || []).filter(b => b.liquidId === l.id)
+          const fullQty = bottleLines.filter(b => !b.isHalf).reduce((sum, b) => sum + Number(b.qty || 1), 0)
+          const halfQty = bottleLines.filter(b => b.isHalf).reduce((sum, b) => sum + Number(b.qty || 1), 0)
+          const halfDelta = saleToDelete.liquidReversal?.[l.id]?.halfBottleDelta ?? -halfQty
+          const canReassemble = Number(liq.halfBottleStock || 0) >= halfDelta
+          liq.closedBottles = Number(liq.closedBottles || 0) + fullQty + (canReassemble ? (halfQty + halfDelta) / 2 : 0)
+          liq.halfBottleStock = Number(liq.halfBottleStock || 0) + (canReassemble ? -halfDelta : halfQty)
+          if ((saleToDelete.refills || []).some(r => r.liquidId === l.id)) {
+            const ids = [...new Set([...(liq.activeSessionIds || []), ...(saleToDelete.liquidReversal?.[l.id]?.sessionDebits || []).map(part => part.id)])]
+            liq.activeSessionIds = ids
+            liq.openBottleCount = Math.max(ids.length, Number(liq.openBottleCount || 0), Math.ceil(liq.activeSaldo / Math.max(1, Number(liq.activeCapacity || liq.sizeML || 100))))
+            liq.activeTotalCapacity = Math.max(Number(liq.activeTotalCapacity || 0), liq.openBottleCount * Number(liq.activeCapacity || liq.sizeML || 100))
+          }
           return liq
         })
       }
@@ -337,7 +352,9 @@ export function reducer(state, action) {
         products:  updatedProducts,
         liquids:   updatedLiquids,
         customers: recalculatedCustomers,
+        fiscalInvoices: state.fiscalInvoices.map(invoice => invoice.saleId === saleToDelete.id ? { ...invoice, status: 'cancelled' } : invoice),
         cashSession: (() => {
+          if (saleToDelete.cashSessionId && saleToDelete.cashSessionId !== state.cashSession.id) return state.cashSession
           const nextSession = {
             ...state.cashSession,
             salePayments: Math.max(0, toMoney(Object.prototype.hasOwnProperty.call(state.cashSession, 'salePayments') ? state.cashSession.salePayments : state.cashSession.sales) - paidAmount),
@@ -468,9 +485,10 @@ const NO_SYNC_ACTIONS = new Set([
 ])
 
 export function AppProvider({ children }) {
-  const { businessId, currentUser } = useAuth()
+  const { businessId, currentUser, business } = useAuth()
   const { branchesEnabled, selectedBranchId, selectedBranch } = useBranches()
   const syncRef = useRef(null)
+  const revisionRef = useRef(0)
 
   // Wrapper reducer que captura el estado nuevo para el sync
   const [state, rawDispatch] = useReducer(reducer, getInitialState())
@@ -479,15 +497,68 @@ export function AppProvider({ children }) {
 
   const sync = useFirestoreSync(businessId, branchesEnabled ? selectedBranchId : null)
 
+  useEffect(() => {
+    setOfflineProjection(operation => {
+      if (operation.businessId !== businessId) return null
+      let projected = stateRef.current
+      const apply = (type, payload) => { projected = reducer(projected, { type, payload }) }
+      const payload = operation.payload
+      if (operation.name === 'commitSale') {
+        const sale = payload.sale
+        if (!projected.sales.some(item => item.id === sale.id)) {
+          for (const item of sale.items || []) apply('DEDUCT_STOCK', { productId: item.productId, qty: item.qty })
+          for (const item of sale.refills || []) apply('CONSUME_REFILL', { liquidId: item.liquidId, points: item.pointsConsumed, price: item.price, qty: 1 })
+          for (const item of sale.bottleSales || []) apply('SELL_CLOSED_BOTTLE', item)
+          apply('ADD_SALE', sale)
+          if (payload.fiscalInvoice) apply('ADD_FISCAL_INVOICE', payload.fiscalInvoice)
+          projected = { ...projected, cart: [], customers: recalculateCustomerLoyalty(projected.customers, projected.sales).map(customer => customer.id === sale.customerId ? { ...customer, creditBalance: Number(customer.creditBalance || 0) + Number(sale.creditAdded || 0) } : customer) }
+        }
+      } else if (operation.name === 'reverseSale') apply('DELETE_SALE', payload.saleId)
+      else if (operation.name === 'openLiquidBottle') apply('OPEN_BOTTLE', payload)
+      else if (operation.name === 'adjustLiquidBalance') apply('ADJUST_SALDO', { liquidId: payload.liquidId, newSaldo: payload.newBalance })
+      else if (operation.name === 'addOpenLiquidStock') {
+        const previous = projected.liquids.find(item => item.id === payload.liquidId)
+          const base = previous ? { ...previous, ...payload.editFields } : { ...payload.liquid, id: payload.liquidId, closedBottles: 0 }
+          const balance = Number(base.activeSaldo || 0)
+          const count = balance > 0 ? Number(base.openBottleCount || 1) : 0
+          apply(previous ? 'UPDATE_LIQUID' : 'ADD_LIQUID', { ...base, hasActive: true,
+            activeSaldo: balance + payload.ml,
+            openBottleCount: count + 1,
+            activeTotalCapacity: Number(base.activeTotalCapacity || count * payload.capacity) + payload.capacity,
+          totalOpenedBottles: Number(base.totalOpenedBottles || 0) + 1,
+            totalOpenedCapacity: Number(base.totalOpenedCapacity || balance) + payload.ml })
+      } else if (operation.name === 'applyBusinessMutation') {
+        const field = { products: 'products', liquids: 'liquids', customers: 'customers', suppliers: 'suppliers', purchases: 'purchases', sales: 'sales', cash_sessions: 'cashSessions', ncfSequences: 'ncfSequences', fiscalInvoices: 'fiscalInvoices' }[payload.collection]
+        if (field) {
+          const previous = projected[field].find(item => item.id === payload.documentId)
+          const updated = { ...previous, ...payload.data, id: payload.documentId }
+          projected = { ...projected, [field]: payload.action === 'delete' ? projected[field].filter(item => item.id !== payload.documentId) : previous ? projected[field].map(item => item.id === payload.documentId ? updated : item) : [updated, ...projected[field]] }
+          if (payload.collection === 'cash_sessions' && (projected.cashSession.id === payload.documentId || payload.data?.open === true)) projected = { ...projected, cashSession: updated }
+        }
+        if (payload.collection === 'settings' || payload.collection === 'branch_settings') projected = { ...projected, settings: { ...projected.settings, ...payload.data } }
+      }
+      return { key: `state:${businessId}:${selectedBranchId}:${business?.dataEpoch || 0}`, state: projected }
+    })
+    return () => setOfflineProjection(null)
+  }, [businessId, selectedBranchId, business?.dataEpoch])
+
   // dispatch sincronizador
   // Calculamos el nuevo estado manualmente ANTES de llamar sync
   // y actualizamos stateRef inmediatamente para que dispatches
   // consecutivos (como en handleCobrar) usen el estado correcto
   const dispatch = (action) => {
+    revisionRef.current += 1
+    if (action.type === 'OPEN_CASH') action = { ...action, payload: { ...action.payload, id: action.payload.id || crypto.randomUUID() } }
     rawDispatch(action)
     // Siempre calculamos el nuevo estado para mantener stateRef actualizado
     const nextState = reducer(stateRef.current, action)
     stateRef.current = nextState
+    if (nextState.dataLoaded && !action._skipSync) {
+      writeLocal(`state:${businessId}:${selectedBranchId}:${business?.dataEpoch || 0}`, nextState).catch(error => {
+        console.error('No se pudo guardar la copia local:', error)
+        window.dispatchEvent(new CustomEvent('vapepos-storage-error', { detail: error.message }))
+      })
+    }
     if (!action._skipSync && !NO_SYNC_ACTIONS.has(action.type)) {
       sync(action, nextState)
     }
@@ -504,11 +575,26 @@ export function AppProvider({ children }) {
   // Carga inicial desde Firestore
   useEffect(() => {
     if (!businessId) return
-    dispatch({ type: 'SET_LOADING', payload: true })
+    if (business?.resetInProgress) return
+    stateRef.current = { ...getInitialState(), dataLoaded: false, loading: true }
+    rawDispatch({ type: 'START_DATA_LOAD', payload: stateRef.current })
 
     async function loadAll() {
+      const revision = revisionRef.current
+      const cacheKey = `state:${businessId}:${selectedBranchId}:${business?.dataEpoch || 0}`
+      const cached = await readLocal(cacheKey).catch(() => null)
+      if (cancelled) return
+      if (cached && !stateRef.current.dataLoaded) {
+        stateRef.current = { ...cached, dataLoaded: true, loading: false, dataError: null }
+        rawDispatch({ type: 'LOAD_ALL', payload: cached })
+      }
+      const pending = (await listOperations()).some(operation => operation.businessId === businessId && operation.uid === currentUser?.id && operation.epoch === (business?.dataEpoch || 0))
+      if (!navigator.onLine || pending) {
+        if (!cached) rawDispatch({ type: 'SET_DATA_ERROR', payload: 'Conecta este equipo a internet para descargar los datos del negocio antes de trabajar sin conexión.' })
+        return
+      }
       try {
-        const [products, liquids, customers, suppliers, sales, users, purchases, cashSessions, settings, fiscalConfigRows, ncfSequences, fiscalInvoices] = await Promise.all([
+        const [products, liquids, customers, suppliers, sales, users, purchases, cashSessions, settings, fiscalConfigRows, ncfSequences, fiscalInvoices] = await withLoadDeadline(Promise.all([
           bizGetAll(businessId, 'products',      [where('active', '==', true), orderBy('name')]),
           bizGetAll(businessId, 'liquids',        [orderBy('name')]),
           bizGetAll(businessId, 'customers',      [orderBy('name')]),
@@ -521,7 +607,7 @@ export function AppProvider({ children }) {
           bizGetAll(businessId, 'fiscalConfig', []),
           bizGetAll(businessId, 'ncfSequences', []),
           bizGetAll(businessId, 'fiscalInvoices', [orderBy('createdAt', 'desc')]),
-        ])
+        ]))
 
         const matchesBranch = item => !branchesEnabled || (selectedBranchId === 'main' ? !item.branchId || item.branchId === 'main' : item.branchId === selectedBranchId)
         const branchProducts = products.filter(matchesBranch)
@@ -540,7 +626,7 @@ export function AppProvider({ children }) {
           return num > max ? num : max
         }, 0)
 
-        rawDispatch({
+        const loaded = {
           type: 'LOAD_ALL',
           payload: {
             products: branchProducts, liquids: branchLiquids, customers: recalculateCustomerLoyalty(customers, sales), suppliers, sales: branchSales, users, purchases: branchPurchases,
@@ -551,15 +637,27 @@ export function AppProvider({ children }) {
             cashSession:  openSession || { open: false, sales: 0, expenses: 0, openAmount: 0, expenseList: [] },
             cashSessions: branchCashSessions,
           },
-        })
+        }
+        if (cancelled) return
+        if (getSyncStatus().pending || revision !== revisionRef.current) {
+          if (!stateRef.current.dataLoaded) rawDispatch({ type: 'SET_DATA_ERROR', payload: 'Hay cambios locales pendientes. Reintenta la carga sin borrar los datos de la aplicación.' })
+          return
+        }
+        stateRef.current = reducer(stateRef.current, loaded)
+        rawDispatch(loaded)
+        await writeLocal(cacheKey, reducer(getInitialState(), loaded))
       } catch (err) {
         console.warn('loadAll failed:', err.message)
-        rawDispatch({ type: 'SET_DATA_LOADED' })
+        if (!cancelled) rawDispatch(cached ? { type: 'SET_DATA_LOADED' } : { type: 'SET_DATA_ERROR', payload: 'No se pudieron descargar los datos del negocio. Revisa la conexión e intenta nuevamente.' })
       }
     }
 
+    let cancelled = false
     loadAll()
-  }, [businessId, branchesEnabled, selectedBranchId])
+    const refresh = () => loadAll()
+    window.addEventListener('vapepos-synced', refresh)
+    return () => { cancelled = true; window.removeEventListener('vapepos-synced', refresh) }
+  }, [businessId, branchesEnabled, selectedBranchId, business?.dataEpoch, business?.resetInProgress])
 
   useEffect(() => {
     rawDispatch({ type: 'CLEAR_CART' })

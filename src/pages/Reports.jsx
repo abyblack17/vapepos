@@ -16,6 +16,7 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
 import toast from 'react-hot-toast'
+import { offlineCallable } from '../services/offlineSync'
 
 const PIE_COLORS = ['#00e5a0', '#00c4e8', '#8b5cf6', '#f59e0b']
 
@@ -186,21 +187,34 @@ export default function Reports() {
   const userNames      = ['Todos', ...new Set(sales.map(s => s.user).filter(Boolean))]
   const fiscalInvoices = state.fiscalInvoices.filter(i => filteredSales.some(s => s.id === i.saleId || s.id === i.id))
 
-  const handleDeleteSale = (sale) => {
+  const handleDeleteSale = async (sale) => {
     if (!isAdmin) { toast.error('Solo el administrador puede eliminar ventas'); return }
-    dispatch({ type: 'DELETE_SALE', payload: sale.id, _sale: sale })
-    toast.success(`Venta ${sale.saleNumber} eliminada`)
-    setDeleteConfirm(null)
+    try {
+      await offlineCallable('reverseSale', { saleId: sale.id })
+      dispatch({ type: 'DELETE_SALE', payload: sale.id, _sale: sale, _skipSync: true })
+      toast.success(`Reversión de venta ${sale.saleNumber || sale.id} guardada para sincronizar`)
+      setDeleteConfirm(null)
+    } catch (error) { toast.error(error.message || 'No se pudo revertir la venta') }
   }
 
-  const handleExport = (format) => {
+  const handleExport = async (format) => {
     if (!canExport) { setShowUpgrade(true); return }
-    exportSalesReport(filteredSales, format, state.settings?.businessName, canViewProfit)
+    try {
+      await exportSalesReport(filteredSales, format, state.settings?.businessName, canViewProfit)
+    } catch (error) {
+      console.error('Error exportando ventas:', error)
+      toast.error('No se pudo descargar el reporte. Intenta nuevamente.')
+    }
   }
 
-  const handleFiscalExport = (format) => {
+  const handleFiscalExport = async (format) => {
     if (!isAdmin) { toast.error('Solo el administrador puede exportar reportes fiscales'); return }
-    exportFiscalReport(fiscalInvoices, format, state.settings?.businessName)
+    try {
+      await exportFiscalReport(fiscalInvoices, format, state.settings?.businessName)
+    } catch (error) {
+      console.error('Error exportando facturas:', error)
+      toast.error('No se pudo descargar el reporte fiscal. Intenta nuevamente.')
+    }
   }
 
   return (

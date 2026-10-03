@@ -437,6 +437,32 @@ body,
   -webkit-overflow-scrolling: touch;
 }
 
+/* Auth forms need their own scroll area because the app shell locks body scroll.
+   Auto margins center short forms without clipping the top of taller forms. */
+.auth-screen {
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1rem;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.auth-screen > div {
+  flex-shrink: 0;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
 .mobile-bottom-nav {
   position: fixed;
   left: 0;

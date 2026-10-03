@@ -3,6 +3,7 @@ import { useApp } from '../../contexts/AppContext'
 import { fmt } from '../../utils/helpers'
 import toast from 'react-hot-toast'
 import { isBluetoothPrinterSupported, printSaleByBluetooth } from '../../services/bluetoothPrinterService'
+import { loadPDFLibrary, loadReceiptCapture } from '../../services/exportLibraries'
 
 export function buildWhatsAppText(sale, settings) {
   const biz = settings?.businessName || 'VapePOS'
@@ -75,31 +76,21 @@ export default function InvoiceModal({ sale, onClose, onNewSale }) {
 
   if (!sale) return null
 
-  const ensureExternalScript = async (globalName, src) => {
-    if (window[globalName]) return
-    const script = document.createElement('script')
-    script.src = src
-    document.head.appendChild(script)
-    await new Promise((resolve, reject) => {
-      script.onload = resolve
-      script.onerror = reject
-    })
-  }
-
   const prepareLogoForCapture = async () => {
     const logoImg = printRef.current?.querySelector('img.logo')
     if (!logoImg || !logoImg.src || logoImg.src.startsWith('data:')) return
     try {
       const resp = await fetch(logoImg.src, { mode: 'cors' })
       const blob = await resp.blob()
-      const b64 = await new Promise(resolve => {
+      const b64 = await new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(reader.error || new Error('No se pudo leer el logo'))
         reader.readAsDataURL(blob)
       })
       logoImg.src = b64
       setLogoSrc(b64)
-      await new Promise(resolve => setTimeout(resolve, 120))
+      await logoImg.decode?.().catch(() => {})
     } catch (error) {
       console.warn('No se pudo preparar el logo para exportar:', error)
     }
@@ -109,16 +100,14 @@ export default function InvoiceModal({ sale, onClose, onNewSale }) {
     if (!printRef.current) return
     setDownloading(true)
     try {
-      await ensureExternalScript('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
-      await ensureExternalScript('jspdf', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
+      const [html2canvas, jsPDF] = await Promise.all([loadReceiptCapture(), loadPDFLibrary()])
       await prepareLogoForCapture()
-      const canvas = await window.html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false })
+      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false, scrollX: 0, scrollY: 0 })
       const imgData = canvas.toDataURL('image/jpeg', 0.96)
       const pdfWidth = settings?.paperSize === '80mm' ? 80 : settings?.paperSize === '48mm' ? 48 : 58
       const pdfHeight = Math.max(120, (canvas.height * pdfWidth) / canvas.width)
-      const { jsPDF } = window.jspdf
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [pdfWidth, pdfHeight] })
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight)
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, (canvas.height * pdfWidth) / canvas.width)
       pdf.save(`Factura-${sale.saleNumber}.pdf`)
       toast.success('Factura PDF descargada')
     } catch (err) {
@@ -133,13 +122,15 @@ export default function InvoiceModal({ sale, onClose, onNewSale }) {
     if (!printRef.current) return
     setDownloading(true)
     try {
-      await ensureExternalScript('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
+      const html2canvas = await loadReceiptCapture()
       await prepareLogoForCapture()
-      const canvas = await window.html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false })
+      const canvas = await html2canvas(printRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true, allowTaint: false, logging: false, scrollX: 0, scrollY: 0 })
       const link = document.createElement('a')
       link.download = `Factura-${sale.saleNumber}.jpg`
       link.href = canvas.toDataURL('image/jpeg', 0.95)
+      document.body.appendChild(link)
       link.click()
+      link.remove()
     } catch (err) {
       toast.error('Error al generar imagen')
       console.warn('html2canvas error:', err)

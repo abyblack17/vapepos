@@ -1,6 +1,6 @@
 import { initializeApp }  from 'firebase/app'
-import { getAuth }        from 'firebase/auth'
-import { getFirestore }   from 'firebase/firestore'
+import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence } from 'firebase/auth'
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 import { getFunctions }   from 'firebase/functions'
 import { getStorage }     from 'firebase/storage'
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider } from 'firebase/app-check'
@@ -36,8 +36,10 @@ if (typeof window !== 'undefined' && appCheckSiteKey) {
   console.error('App Check no se inicializó: falta VITE_FIREBASE_APPCHECK_SITE_KEY')
 }
 
-export const auth      = getAuth(app)
-export const db        = getFirestore(app)
+export const auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+})
 export const functions = getFunctions(app, 'us-central1')
 export const storage   = getStorage(app)
 

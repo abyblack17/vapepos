@@ -6,7 +6,20 @@ service cloud.firestore {
     function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
     function isActive() { return profileExists() && profile().active == true; }
     function isSuperAdmin() { return isActive() && profile().role == 'superadmin'; }
-    function belongsTo(businessId) { return isActive() && profile().businessId == businessId; }
+    function trialValid(business) {
+      return business.get('licenseType', '') != 'trial'
+        || (business.get('trialExpiresAt', null) is timestamp && request.time < business.trialExpiresAt);
+    }
+    function currentBusinessVersion(businessId) {
+      let business = get(/databases/$(database)/documents/businesses/$(businessId)).data;
+      return trialValid(business) && (request.method in ['get', 'list'] || (
+        business.active == true && business.get('resetInProgress', false) == false
+        && (request.method == 'delete'
+          ? resource.data.get('dataEpoch', 0) == business.get('dataEpoch', 0)
+          : request.resource.data.get('dataEpoch', 0) == business.get('dataEpoch', 0))
+      ));
+    }
+    function belongsTo(businessId) { return isActive() && profile().businessId == businessId && currentBusinessVersion(businessId); }
     function isAdmin(businessId) { return belongsTo(businessId) && profile().role == 'Administrador'; }
     function isManager(businessId) { return belongsTo(businessId) && profile().role in ['Administrador', 'Encargado']; }
     function validBusinessPayload(businessId) { return request.resource.data.businessId == businessId; }
@@ -19,7 +32,8 @@ service cloud.firestore {
     }
 
     match /businesses/{businessId} {
-      allow read: if belongsTo(businessId) || isSuperAdmin();
+      // The owner can still read the license to see the expiry screen and a later activation.
+      allow read: if (isActive() && profile().businessId == businessId) || isSuperAdmin();
       allow create: if false;
       allow update: if isSuperAdmin() || (isAdmin(businessId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'address', 'taxRate', 'logoUrl', 'updatedAt']));
@@ -124,7 +138,7 @@ service cloud.firestore {
         allow create, delete: if isAdmin(businessId) || isSuperAdmin();
         allow update: if isAdmin(businessId) || isSuperAdmin()
           || (belongsTo(businessId)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextNumber', 'updatedAt'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextNumber', 'updatedAt', 'dataEpoch'])
             && request.resource.data.nextNumber == resource.data.nextNumber + 1
             && resource.data.active == true && resource.data.nextNumber <= resource.data.endNumber);
       }
@@ -140,6 +154,14 @@ service cloud.firestore {
           && request.resource.data.role == profile().role
           && request.resource.data.keys().hasAll(['action', 'module', 'userId', 'role', 'businessId', 'createdAt']);
         allow update, delete: if false;
+      }
+      match /announcement_reads/{announcementId} {
+        allow read: if belongsTo(businessId) || isSuperAdmin();
+        allow create, update: if belongsTo(businessId)
+          && validBusinessPayload(businessId)
+          && request.resource.data.announcementId == announcementId
+          && request.resource.data.readBy == request.auth.uid;
+        allow delete: if false;
       }
       match /upgrade_requests/{docId} {
         allow read: if isAdmin(businessId) || isSuperAdmin();

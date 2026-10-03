@@ -1,29 +1,10 @@
 // ── exportService.js ──────────────────────────────────────────
-// Exportar datos a Excel (.xlsx) y PDF usando CDN libraries
-// xlsx (SheetJS) y jsPDF + jspdf-autotable
-
-const XLSX_CDN    = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
-const JSPDF_CDN   = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-const AUTOTABLE_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js'
-
-async function loadScript(src) {
-  if (document.querySelector(`script[src="${src}"]`)) {
-    await new Promise(r => setTimeout(r, 100))
-    return
-  }
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script')
-    s.src = src
-    s.onload = resolve
-    s.onerror = reject
-    document.head.appendChild(s)
-  })
-}
+// Bibliotecas incluidas en el build y la caché offline, sin scripts CDN.
+import { loadExcelLibrary, loadPDFLibraries } from './exportLibraries'
 
 // ── EXCEL ─────────────────────────────────────────────────────
 export async function exportToExcel(rows, columns, filename, sheetName = 'Datos') {
-  await loadScript(XLSX_CDN)
-  const XLSX = window.XLSX
+  const XLSX = await loadExcelLibrary()
 
   const header = columns.map(c => c.label)
   const data   = rows.map(row => columns.map(c => row[c.key] ?? ''))
@@ -40,10 +21,7 @@ export async function exportToExcel(rows, columns, filename, sheetName = 'Datos'
 
 // ── PDF ───────────────────────────────────────────────────────
 export async function exportToPDF(rows, columns, filename, title, businessName = 'VapePOS') {
-  await loadScript(JSPDF_CDN)
-  await loadScript(AUTOTABLE_CDN)
-
-  const { jsPDF } = window.jspdf
+  const { jsPDF, autoTable } = await loadPDFLibraries()
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
 
   // Header
@@ -64,7 +42,7 @@ export async function exportToPDF(rows, columns, filename, title, businessName =
   doc.text(`Generado: ${new Date().toLocaleDateString('es-DO')}`, 14, 36)
 
   // Table
-  doc.autoTable({
+  autoTable(doc, {
     head:       [columns.map(c => c.label)],
     body:       rows.map(row => columns.map(c => row[c.key] ?? '')),
     startY:     42,

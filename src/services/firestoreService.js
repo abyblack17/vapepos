@@ -29,6 +29,7 @@ import {
 } from 'firebase/firestore'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../config/firebase'
+import { queueOperation } from './offlineSync'
 
 // ── Path builders ─────────────────────────────────────────────
 
@@ -76,7 +77,7 @@ export async function bizGetAll(businessId, colName, constraints = []) {
     return snap.docs.map(d => ({ id: d.id, ...d.data() }))
   } catch (err) {
     console.warn(`bizGetAll(${colName}) failed:`, err.message)
-    return []
+    throw err
   }
 }
 
@@ -101,11 +102,12 @@ export async function bizAdd(businessId, colName, data) {
     updatedAt: serverTimestamp(),
   }
   try {
-    const ref = await addDoc(bizCol(businessId, colName), payload)
-    return { id: ref.id, ...payload }
+    const id = cleanData.id || crypto.randomUUID()
+    await queueOperation('applyBusinessMutation', { collection: colName, documentId: id, action: 'set', data: cleanData }, businessId)
+    return { id, ...cleanData, businessId }
   } catch (err) {
     console.warn(`bizAdd(${colName}) failed:`, err.message)
-    return { id: `local_${Date.now()}`, ...payload }
+    throw err
   }
 }
 
@@ -117,11 +119,11 @@ export async function bizSet(businessId, colName, docId, data) {
   const { id: _stripId, ...cleanData } = data
   const payload = { ...cleanData, businessId, updatedAt: serverTimestamp() }
   try {
-    await setDoc(bizDoc(businessId, colName, docId), payload, { merge: true })
+    await queueOperation('applyBusinessMutation', { collection: colName, documentId: docId, action: 'set', data: cleanData }, businessId)
     return { id: docId, ...payload }
   } catch (err) {
     console.warn(`bizSet(${colName}/${docId}) failed:`, err.message)
-    return null
+    throw err
   }
 }
 
@@ -132,14 +134,11 @@ export async function bizUpdate(businessId, colName, docId, updates) {
   }
   const { id: _stripId, ...cleanUpdates } = updates
   try {
-    await updateDoc(bizDoc(businessId, colName, docId), {
-      ...cleanUpdates,
-      updatedAt: serverTimestamp(),
-    })
+    await queueOperation('applyBusinessMutation', { collection: colName, documentId: docId, action: 'update', data: cleanUpdates }, businessId)
     return true
   } catch (err) {
     console.warn(`bizUpdate(${colName}/${docId}) failed:`, err.message)
-    return false
+    throw err
   }
 }
 
@@ -149,11 +148,11 @@ export async function bizDelete(businessId, colName, docId) {
     return false
   }
   try {
-    await deleteDoc(bizDoc(businessId, colName, docId))
+    await queueOperation('applyBusinessMutation', { collection: colName, documentId: docId, action: 'delete' }, businessId)
     return true
   } catch (err) {
     console.warn(`bizDelete(${colName}/${docId}) failed:`, err.message)
-    return false
+    throw err
   }
 }
 
@@ -180,23 +179,7 @@ export async function getBusinessSettings(businessId, branchId = null) {
 
 export async function saveBusinessSettings(businessId, settings, branchId = null) {
   try {
-    if (branchId && branchId !== 'main') {
-      const fn = httpsCallable(getFunctions(), 'manageBranch')
-      await fn({ action: 'saveSettings', branchId, settings })
-      return true
-    }
-    await setDoc(bizSettingsDoc(businessId), {
-      ...settings,
-      updatedAt: serverTimestamp(),
-    }, { merge: true })
-    // Also update root business doc fields that are shown in admin panels
-    await updateDoc(businessDoc(businessId), {
-      name:      settings.businessName,
-      phone:     settings.phone,
-      address:   settings.address,
-      taxRate:   settings.taxRate,
-      updatedAt: serverTimestamp(),
-    })
+    await queueOperation('applyBusinessMutation', { collection: branchId && branchId !== 'main' ? 'branch_settings' : 'settings', documentId: branchId && branchId !== 'main' ? branchId : 'config', action: 'set', data: settings }, businessId)
     return true
   } catch (err) {
     console.warn('saveBusinessSettings failed:', err.message)

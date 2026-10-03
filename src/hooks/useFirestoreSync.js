@@ -10,6 +10,7 @@
 // ============================================================
 
 import { useCallback } from 'react'
+import { queueOperation } from '../services/offlineSync'
 import {
   bizAdd, bizUpdate, bizDelete, bizSet,
   saveBusinessSettings, serverTimestamp,
@@ -74,38 +75,21 @@ export function useFirestoreSync(businessId, branchId = null) {
           await bizDelete(businessId, 'liquids', action.payload)
           break
         case 'OPEN_BOTTLE': {
-          const liq = newState.liquids.find(l => l.id === action.payload.liquidId)
-          if (liq) {
-            await bizUpdate(businessId, 'liquids', liq.id, {
-              closedBottles:  liq.closedBottles,
-              hasActive:      liq.hasActive,
-              activeSaldo:    liq.activeSaldo,
-              activeOpenedAt: new Date(),
-            })
-          }
+          await queueOperation('openLiquidBottle', { liquidId: action.payload.liquidId }, businessId)
           break
         }
         case 'CONSUME_REFILL': {
-          const liq = newState.liquids.find(l => l.id === action.payload.liquidId)
-          if (liq) {
-            await bizUpdate(businessId, 'liquids', liq.id, {
-              activeSaldo:           liq.activeSaldo,
-              totalRechargesAllTime: liq.totalRechargesAllTime,
-              totalRevenueAllTime:   liq.totalRevenueAllTime,
-            })
-          }
+          throw new Error('Las recargas se guardan junto con su venta mediante commitSale.')
           break
         }
         case 'ADJUST_SALDO': {
-          await bizUpdate(businessId, 'liquids', action.payload.liquidId, {
-            activeSaldo: parseInt(action.payload.newSaldo),
-          })
+          if (!action.payload.reason?.trim()) throw new Error('El ajuste requiere un motivo registrado.')
+          await queueOperation('adjustLiquidBalance', { liquidId: action.payload.liquidId, newBalance: Number(action.payload.newSaldo), reason: action.payload.reason }, businessId)
           break
         }
         case 'CLOSE_BOTTLE':
-          await bizUpdate(businessId, 'liquids', action.payload.liquidId, {
-            hasActive: false, activeSaldo: 0,
-          })
+          if (!action.payload.reason?.trim()) throw new Error('Cerrar un frasco requiere un ajuste con motivo registrado.')
+          await queueOperation('adjustLiquidBalance', { liquidId: action.payload.liquidId, newBalance: 0, reason: action.payload.reason }, businessId)
           break
         case 'SELL_CLOSED_BOTTLE': {
           const liq = newState.liquids.find(l => l.id === action.payload.liquidId)
@@ -140,53 +124,7 @@ export function useFirestoreSync(businessId, branchId = null) {
           break
         }
         case 'DELETE_SALE': {
-          await bizDelete(businessId, 'sales', action.payload)
-          // Revert product stock in Firestore
-          const productsToUpdate = newState.products.filter(p => {
-            const sale = action._sale
-            return sale?.items?.some(i => i.productId === p.id)
-          })
-          for (const p of productsToUpdate) {
-            await bizUpdate(businessId, 'products', p.id, { stock: p.stock })
-          }
-          // Revert liquid saldo in Firestore
-          const liquidsToUpdate = newState.liquids.filter(l => {
-            const sale = action._sale
-            return sale?.refills?.some(r => r.liquidId === l.id) ||
-                   sale?.bottleSales?.some(b => b.liquidId === l.id)
-          })
-          for (const l of liquidsToUpdate) {
-            await bizUpdate(businessId, 'liquids', l.id, {
-              activeSaldo:           l.activeSaldo,
-              totalRechargesAllTime: l.totalRechargesAllTime,
-              totalRevenueAllTime:   l.totalRevenueAllTime,
-              closedBottles:         l.closedBottles,
-            })
-          }
-          // Update cash session
-          const session = newState.cashSession
-          if (session?.id) {
-            await bizUpdate(businessId, 'cash_sessions', session.id, {
-              sales: session.sales,
-              salePayments: session.salePayments || 0,
-            })
-          }
-          // Recalcular y persistir métricas de clientes después de borrar una venta.
-          // Esto evita que recargas/puntos se queden pegados cuando se eliminan facturas.
-          const customersToUpdate = action._sale?.customerId
-            ? newState.customers.filter(c => c.id === action._sale.customerId)
-            : newState.customers
-          for (const customer of customersToUpdate) {
-            await bizUpdate(businessId, 'customers', customer.id, {
-              totalSpent:        customer.totalSpent || 0,
-              totalTransactions: customer.totalTransactions || 0,
-              creditBalance:     customer.creditBalance || 0,
-              refillRewards:     customer.refillRewards || 0,
-              totalRefills:      customer.totalRefills || 0,
-              rewardPoints:      customer.rewardPoints || 0,
-              lastPurchase:      customer.lastPurchase || null,
-            })
-          }
+          await queueOperation('reverseSale', { saleId: action.payload }, businessId)
           break
         }
 
@@ -260,7 +198,7 @@ export function useFirestoreSync(businessId, branchId = null) {
             expenses:    0,
             expenseList: [],
           }
-          const saved = await bizAdd(businessId, 'cash_sessions', sessionData)
+          const saved = await bizSet(businessId, 'cash_sessions', action.payload.id, sessionData)
           if (saved?.id) {
             setTimeout(() => { window.__vapepos_set_cash_id?.(saved.id) }, 100)
           }

@@ -38,7 +38,7 @@ const PRO_ITEMS = ['suppliers']
 
 export default function Sidebar({ currentPage, onNavigate }) {
   const { state }    = useApp()
-  const { business }   = useAuth()
+  const { business, isSupport }   = useAuth()
   const { hasFeature, isPro, daysLeft, inGrace, isTrial } = usePlan()
   const { currentUser, alerts } = state
   const { branchesEnabled } = useBranches()
@@ -63,7 +63,7 @@ export default function Sidebar({ currentPage, onNavigate }) {
 
   return (
     <>
-    <aside className="w-56 bg-[#0c1424] border-r border-white/5 flex flex-col flex-shrink-0 overflow-hidden" style={{height: '100dvh'}}>
+    <aside className="w-56 bg-[#0c1424] border-r border-white/5 flex flex-col flex-shrink-0 overflow-hidden" style={{height: isSupport ? '100%' : '100dvh'}}>
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/5">
         <div className="font-display text-2xl font-black gradient-neon tracking-tight">VapePOS</div>

@@ -40,7 +40,8 @@ export async function getAllSales(businessId) {
 
 // ── Delete ───────────────────────────────────────────────────
 export async function deleteSale(businessId, saleId) {
-  return bizDelete(businessId, COL, saleId)
+  const { queueOperation } = await import('./offlineSync')
+  return queueOperation('reverseSale', { saleId }, businessId)
 }
 
 // ── Analytics (pure functions, work on local arrays) ─────────

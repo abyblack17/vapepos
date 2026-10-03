@@ -9,11 +9,12 @@ import { fmt, genId } from '../utils/helpers'
 import { findExistingByNameOrCode, hasDuplicateName, makeLiquidCode } from '../utils/recordGuards'
 import { bizAdd, bizSet, bizUpdate, bizDelete } from '../services/firestoreService'
 import { uploadLiquidImage, deleteImage } from '../services/storageService'
-import { getBottlePct, getRendimientoReport, detectLoss, getNicotinaLabel } from '../services/liquidService'
+import { getBottlePct, getRendimientoReport, detectLoss, getNicotinaLabel, getRefillButtons, getPointsForType, getRefillProjections, fmtProjection, fmtLiquidMoney } from '../services/liquidService'
 import { usePlan } from '../hooks/usePlan'
 import toast from 'react-hot-toast'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../config/firebase'
+import { offlineCallable } from '../services/offlineSync'
 
 const ALL_TABS = ['Botellas Activas', 'Inventario', 'Historial', 'Rendimiento']
 
@@ -54,7 +55,12 @@ export default function Refills() {
     if (liquid.closedBottles < 1) { toast.error('No hay botellas cerradas disponibles'); return }
     if (Number(liquid.openBottleCount || (liquid.hasActive ? 1 : 0)) >= 3) { toast.error('El máximo es 3 frascos abiertos del mismo líquido'); return }
     try {
-      const result = await httpsCallable(functions, 'openLiquidBottle')({ liquidId: liquid.id })
+      const result = await offlineCallable('openLiquidBottle', { liquidId: liquid.id }, { liquid: {
+        ...liquid, closedBottles: liquid.closedBottles - 1, hasActive: true,
+        activeSaldo: Number(liquid.activeSaldo || 0) + Number(liquid.activeCapacity || 0),
+        openBottleCount: Number(liquid.openBottleCount || (liquid.hasActive ? 1 : 0)) + 1,
+        activeTotalCapacity: Number(liquid.activeTotalCapacity || 0) + Number(liquid.activeCapacity || 0),
+      } })
       dispatch({ type: 'UPDATE_LIQUID', payload: { id: liquid.id, ...result.data.liquid } })
       toast.success(`Frasco abierto. Saldo acumulado: ${result.data.liquid.activeSaldo} ml`)
       setModal(null)
@@ -65,7 +71,7 @@ export default function Refills() {
   const handleAdjustSaldo = async (liquidId, newSaldo, reason) => {
     if (!reason?.trim()) { toast.error('Indica el motivo del ajuste'); return }
     try {
-      const result = await httpsCallable(functions, 'adjustLiquidBalance')({ liquidId, newBalance: Number(newSaldo), reason })
+      const result = await offlineCallable('adjustLiquidBalance', { liquidId, newBalance: Number(newSaldo), reason }, { liquid: { activeSaldo: Number(newSaldo), hasActive: Number(newSaldo) > 0 } })
       dispatch({ type: 'UPDATE_LIQUID', payload: { id: liquidId, ...result.data.liquid } })
       toast.success('Saldo ajustado y registrado en la bitácora')
       setModal(null)
@@ -104,7 +110,7 @@ export default function Refills() {
       notes:       'Frasco completo',
     }
     try {
-      await httpsCallable(functions, 'commitSale')({ sale, cashSessionId: state.cashSession?.id || '' })
+      await offlineCallable('commitSale', { sale, cashSessionId: state.cashSession?.id || '' })
       dispatch({ type: 'SELL_CLOSED_BOTTLE', payload: { liquidId: liquid.id, qty }, _skipSync: true })
       dispatch({ type: 'ADD_SALE', payload: sale, _skipSync: true })
       toast.success(`🍶 ${qty} frasco(s) de "${liquid.name}" vendido(s) — ${fmt(sale.total)}`)
@@ -116,7 +122,7 @@ export default function Refills() {
     if (savingLiquid) return
     const name = data.name?.trim()
     if (!name) { toast.error('Nombre requerido'); return }
-    if (hasDuplicateName(liquids, name)) {
+    if (hasDuplicateName(liquids, name) && data.bottleState !== 'open') {
       toast.error(`Ya existe un líquido llamado "${name}"`)
       return
     }
@@ -138,14 +144,14 @@ export default function Refills() {
       activeTotalCapacity: 0,
       activeSessionIds: [],
       halfBottleStock: 0,
-      activeCapacity:         parseInt(data.activeCapacity)  || 100,
-      pointsR50:              parseInt(data.pointsR50)       || 10,
-      pointsR100:             parseInt(data.pointsR100)      || 20,
-      pointsR150:             parseInt(data.pointsR150)      || 30,
-      costPerBottle:          parseInt(data.costPerBottle)   || 0,
-      pricePerBottle:         parseInt(data.pricePerBottle)  || 0,
+      activeCapacity:         Number(data.activeCapacity)  || 100,
+      pointsR50:              Number(data.pointsR50)       || 10,
+      pointsR100:             Number(data.pointsR100)      || 20,
+      pointsR150:             Number(data.pointsR150)      || 30,
+      costPerBottle:          Number(data.costPerBottle)   || 0,
+      pricePerBottle:         Number(data.pricePerBottle)  || 0,
       taxIncluded:             data.taxIncluded === true,
-      sizeML:                 parseInt(data.sizeML)          || 100,
+      sizeML:                 Number(data.sizeML)          || 100,
       active:                 true,
       imageUrl:               data.imageUrl || '',
       color:                  data.color    || '',
@@ -153,6 +159,29 @@ export default function Refills() {
 
     setSavingLiquid(true)
     try {
+      if (data.bottleState === 'open') {
+        const ml = Number(data.openML)
+        const capacity = Number(data.activeCapacity)
+        if (!(ml > 0 && capacity > 0 && ml <= capacity)) throw new Error('Los ml disponibles deben ser mayores que cero y no superar la capacidad de la botella.')
+        const existing = liquids.find(item => item.name.trim().toLowerCase() === name.toLowerCase())
+        if (existing && (String(existing.brand || '').trim().toLowerCase() !== String(data.brand || '').trim().toLowerCase()
+          || Number(existing.activeCapacity) !== capacity
+          || String(existing.nicotinaFreebase || 'ninguna') !== String(data.nicotinaFreebase || 'ninguna')
+          || String(existing.nicotinaSales || 'ninguna') !== String(data.nicotinaSales || 'ninguna'))) throw new Error('El líquido existente tiene otra marca, capacidad o nicotina. Usa un nombre distinto.')
+        if (Number(existing?.openBottleCount || (existing?.hasActive ? 1 : 0)) >= 3) throw new Error('El máximo es 3 botellas abiertas del mismo líquido.')
+        const id = existing?.id || data.id || genId('l')
+        const base = existing || { ...liquidData, id, closedBottles: 0 }
+        const updated = { ...base, id, hasActive: true, activeSaldo: Number(base.activeSaldo || 0) + ml,
+          openBottleCount: Number(base.openBottleCount || (base.hasActive ? 1 : 0)) + 1,
+          activeTotalCapacity: Number(base.activeTotalCapacity || 0) + capacity,
+          totalOpenedBottles: Number(base.totalOpenedBottles || 0) + 1,
+          totalOpenedCapacity: Number(base.totalOpenedCapacity || 0) + ml }
+        await offlineCallable('addOpenLiquidStock', { liquidId: id, liquid: liquidData, ml, capacity })
+        dispatch({ type: existing ? 'UPDATE_LIQUID' : 'ADD_LIQUID', payload: updated })
+        toast.success(`Botella abierta registrada: ${updated.activeSaldo} ml disponibles`)
+        setModal(null)
+        return
+      }
       if (businessId) {
         const liquidId = data.id || genId('l')
         const saved = await bizSet(businessId, 'liquids', liquidId, liquidData)
@@ -167,6 +196,8 @@ export default function Refills() {
       dispatch({ type: 'ADD_LIQUID', payload: { ...liquidData, id: genId('l') } })
       toast.success(`Liquido "${liquidData.name}" registrado`)
       setModal(null)
+    } catch (error) {
+      toast.error(error.message || 'No se pudo guardar el líquido')
     } finally {
       setSavingLiquid(false)
     }
@@ -187,14 +218,16 @@ export default function Refills() {
       brand:            data.brand,
       flavor:           data.flavor,
       category:         data.category,
-      sizeML:           parseInt(data.sizeML)          || 100,
-      costPerBottle:    parseInt(data.costPerBottle)   || 0,
-      pricePerBottle:   parseInt(data.pricePerBottle)  || 0,
+      sizeML:           Number(data.sizeML)          || 100,
+      costPerBottle:    Number(data.costPerBottle)   || 0,
+      pricePerBottle:   Number(data.pricePerBottle)  || 0,
+      refillConsumption: data.refillConsumption,
+      consumptionUnit: data.consumptionUnit,
       taxIncluded:       data.taxIncluded === true,
       closedBottles:    parseInt(data.closedBottles)   || 0,
-      pointsR50:        parseInt(data.pointsR50)       || 10,
-      pointsR100:       parseInt(data.pointsR100)      || 20,
-      pointsR150:       parseInt(data.pointsR150)      || 30,
+      pointsR50:        Number(data.pointsR50)       || 10,
+      pointsR100:       Number(data.pointsR100)      || 20,
+      pointsR150:       Number(data.pointsR150)      || 30,
       nicotinaFreebase: data.sinNicotina ? 'ninguna' : (data.nicotinaFreebase || 'ninguna'),
       nicotinaSales:    data.sinNicotina ? 'ninguna' : (data.nicotinaSales    || 'ninguna'),
       imageUrl:         data.imageUrl || '',
@@ -203,13 +236,34 @@ export default function Refills() {
 
     setSavingLiquid(true)
     try {
-      dispatch({ type: 'EDIT_LIQUID', payload: { id: data.id, ...fields } })
+      if (data.addOpenBottle) {
+        const original = liquids.find(item => item.id === data.id)
+        if (!original) throw new Error('El líquido ya no existe. Actualiza el inventario.')
+        const ml = Number(data.openML)
+        const capacity = Number(original.activeCapacity || original.sizeML || 100)
+        if (!Number.isFinite(ml) || ml <= 0 || ml > capacity) throw new Error(`Indica los ml restantes del frasco: más de 0 y hasta ${capacity} ml.`)
+        const previousBalance = Number(original.activeSaldo || 0)
+        const count = previousBalance > 0 ? Number(original.openBottleCount || 1) : 0
+        if (count >= 3) throw new Error('El máximo es 3 frascos abiertos del mismo líquido.')
+        await offlineCallable('addOpenLiquidStock', { liquidId: original.id, liquid: original, ml, capacity, editFields: fields })
+        dispatch({ type: 'EDIT_LIQUID', payload: { ...original, ...fields, hasActive: true,
+          activeSaldo: previousBalance + ml, openBottleCount: count + 1,
+          activeTotalCapacity: Number(original.activeTotalCapacity || count * capacity) + capacity,
+          totalOpenedBottles: Number(original.totalOpenedBottles || 0) + 1,
+          totalOpenedCapacity: Number(original.totalOpenedCapacity || previousBalance) + ml } })
+        toast.success(`Frasco añadido a "${name}". Saldo acumulado: ${previousBalance + ml} ml`)
+        setModal(null)
+        return
+      }
       if (businessId && data.id) {
         const ok = await bizUpdate(businessId, 'liquids', data.id, fields)
-        if (!ok) await bizSet(businessId, 'liquids', data.id, { ...fields })
+        if (!ok) throw new Error('No se pudieron guardar los cambios del líquido.')
       }
+      dispatch({ type: 'EDIT_LIQUID', payload: { id: data.id, ...fields } })
       toast.success(`"${name}" actualizado`)
       setModal(null)
+    } catch (error) {
+      toast.error(error.message || 'No se pudieron guardar los cambios')
     } finally {
       setSavingLiquid(false)
     }
@@ -385,7 +439,7 @@ export default function Refills() {
             <table className="w-full">
               <thead>
                 <tr>
-                  {['Nombre', 'Marca / Sabor', 'Tamaño', 'Costo', 'Precio', 'Cerradas', 'Activa', 'Pts R50/100/150', 'Estado', 'Acciones'].map(h => (
+                  {['Nombre', 'Marca / Sabor', 'Tamaño', 'Costo', 'Precio', 'Cerradas', 'Activa', 'Consumo por recarga', 'Estado', 'Acciones'].map(h => (
                     <th key={h} className="table-header">{h}</th>
                   ))}
                 </tr>
@@ -402,7 +456,7 @@ export default function Refills() {
                     <td className="table-cell">
                       {l.hasActive ? <><span className="badge badge-green">Sí</span><span className="ml-1 text-xs text-slate-500 font-mono">{l.activeSaldo}pts</span></> : <span className="badge badge-gray">No</span>}
                     </td>
-                    <td className="table-cell"><span className="badge badge-amber font-mono text-xs">{l.pointsR50}/{l.pointsR100}/{l.pointsR150}</span></td>
+                    <td className="table-cell"><span className="badge badge-amber font-mono text-xs">{getRefillButtons(state.settings).map(b => 'RD$' + b.price + ': ' + fmtProjection(getPointsForType(l, b.price, state.settings)) + ' pts').join(' · ')}</span></td>
                     <td className="table-cell"><span className={`badge ${l.active ? 'badge-green' : 'badge-gray'}`}>{l.active ? 'Activo' : 'Inactivo'}</span></td>
                     <td className="table-cell">
                       <div className="flex gap-1">
@@ -486,64 +540,8 @@ export default function Refills() {
       {tab === 'Rendimiento' && (
         canViewRendimiento ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-            {liquids.filter(l => l.hasActive || l.totalRechargesAllTime > 0).map(liquid => {
-              const r = getRendimientoReport(liquid, refillSales)
-              return (
-                <div key={liquid.id} className="card p-5 space-y-4">
-                  <div className="font-display font-bold text-slate-200">{liquid.name} — Rendimiento</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-[#101c35] rounded-lg p-3">
-                      <div className="text-xs text-slate-500 mb-0.5">Recargas esperadas (RD$100)</div>
-                      <div className="font-display font-bold text-lg text-[#00c4e8]">{r.expectedR100}</div>
-                      <div className="text-xs text-slate-500 mt-1">a {fmt(r.costPerR100)} de costo c/u</div>
-                    </div>
-                    <div className="bg-[#101c35] rounded-lg p-3">
-                      <div className="text-xs text-slate-500 mb-0.5">Realizadas</div>
-                      <div className="font-display font-bold text-lg text-[#00e5a0]">{r.realRecharges}</div>
-                      <div className="text-xs text-slate-500 mt-1">de {r.expectedR100} posibles</div>
-                    </div>
-                  </div>
-                  <div className="bg-[#00e5a0]/5 border border-[#00e5a0]/20 rounded-xl p-3 space-y-1.5">
-                    <div className="text-xs font-bold text-[#00e5a0] uppercase tracking-wider mb-2">Ganancia por recarga</div>
-                    {[
-                      { label: 'Recarga RD$50',  cost: r.costPerR50,  profit: r.profitPerR50  },
-                      { label: 'Recarga RD$100', cost: r.costPerR100, profit: r.profitPerR100 },
-                      { label: 'Recarga RD$150', cost: r.costPerR150, profit: r.profitPerR150 },
-                    ].map((row, i) => (
-                      <div key={i} className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400">{row.label}</span>
-                        <div className="flex items-center gap-3">
-                          <span className="text-slate-500">costo {fmt(row.cost)}</span>
-                          <span className={`font-mono font-bold ${row.profit >= 0 ? 'text-[#00e5a0]' : 'text-red-400'}`}>
-                            +{fmt(row.profit)} ganancia
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-[#101c35] rounded-lg p-3">
-                      <div className="text-xs text-slate-500 mb-0.5">Ganancia total potencial</div>
-                      <div className={`font-display font-bold text-lg ${r.totalPotential >= 0 ? 'text-[#00e5a0]' : 'text-red-400'}`}>{fmt(r.totalPotential)}</div>
-                    </div>
-                    <div className="bg-[#101c35] rounded-lg p-3">
-                      <div className="text-xs text-slate-500 mb-0.5">Ganancia real hasta hoy</div>
-                      <div className={`font-display font-bold text-lg ${r.realNetProfit >= 0 ? 'text-[#00e5a0]' : 'text-red-400'}`}>{fmt(r.realNetProfit)}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-slate-400">ROI potencial (botella completa)</span>
-                      <span className={`font-mono font-bold ${r.roiPotential >= 0 ? 'text-[#00e5a0]' : 'text-red-400'}`}>{r.roiPotential}%</span>
-                    </div>
-                    <div className="bottle-progress">
-                      <div className="h-full rounded bottle-fill-green" style={{ width: `${Math.min(100, Math.max(0, r.roiPotential / 2))}%` }} />
-                    </div>
-                  </div>
-                  {r.lossData && <div className="alert-danger text-xs">🔴 {r.lossData.message}</div>}
-                </div>
-              )
-            })}
+            {liquids.map(liquid => <LiquidProjectionCard key={liquid.id} liquid={liquid} settings={state.settings} />)}
+
           </div>
         ) : (
           // Bloqueado — plan básico
@@ -573,10 +571,10 @@ export default function Refills() {
         <SellBottleModal liquid={modal.data} onClose={() => setModal(null)} onSell={handleSellBottle} settings={state.settings} />
       )}
       {modal?.type === 'new' && (
-        <LiquidFormModal onClose={() => setModal(null)} onSave={handleNewLiquid} settings={state.settings} title="💧 Nuevo Líquido" businessId={businessId} />
+        <LiquidFormModal onClose={() => setModal(null)} onSave={handleNewLiquid} settings={state.settings} title="💧 Nuevo Líquido" businessId={businessId} saving={savingLiquid} />
       )}
       {modal?.type === 'editLiquid' && (
-        <LiquidFormModal liquid={modal.data} onClose={() => setModal(null)} onSave={handleEditLiquid} settings={state.settings} title={`✏️ Editar: ${modal.data.name}`} businessId={businessId} />
+        <LiquidFormModal liquid={modal.data} onClose={() => setModal(null)} onSave={handleEditLiquid} settings={state.settings} title={`✏️ Editar: ${modal.data.name}`} businessId={businessId} saving={savingLiquid} />
       )}
       {modal?.type === 'deleteLiquid' && (
         <ConfirmDeleteModal
@@ -590,7 +588,7 @@ export default function Refills() {
         <AdjustSaldoModal liquid={modal.data} onClose={() => setModal(null)} onSave={handleAdjustSaldo} />
       )}
       {modal?.type === 'detail' && (
-        <LiquidDetailModal liquid={modal.data} refillSales={refillSales} onClose={() => setModal(null)} />
+        <LiquidDetailModal settings={state.settings} liquid={modal.data} refillSales={refillSales} onClose={() => setModal(null)} />
       )}
 
       {showUpgrade && <UpgradeModal onClose={() => setShowUpgrade(false)} />}
@@ -687,6 +685,7 @@ function SellBottleModal({ liquid, onClose, onSell, settings }) {
 }
 
 function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId, saving = false }) {
+  const refillButtons = getRefillButtons(settings)
   const [form, setForm] = useState({
     id:             liquid?.id            || genId('l'),
     name:           liquid?.name          || '',
@@ -697,10 +696,12 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
     pricePerBottle: liquid?.pricePerBottle|| '',
     sizeML:         liquid?.sizeML        || '100',
     closedBottles:  liquid?.closedBottles ?? '0',
+    bottleState: 'closed',
+    addOpenBottle: false,
+    openML: '',
     activeCapacity: liquid?.activeCapacity|| settings?.defaultBottleCapacity || '100',
-    pointsR50:      liquid?.pointsR50     || settings?.defaultPointsR50  || '10',
-    pointsR100:     liquid?.pointsR100    || settings?.defaultPointsR100 || '20',
-    pointsR150:     liquid?.pointsR150    || settings?.defaultPointsR150 || '30',
+    refillConsumption: Object.fromEntries(refillButtons.map(b => [String(b.price), liquid ? getPointsForType(liquid, b.price, settings) : b.points])),
+    consumptionUnit: liquid?.consumptionUnit || 'ml',
     sinNicotina:      !liquid?.nicotinaFreebase || liquid?.nicotinaFreebase === 'ninguna',
     nicotinaFreebase: (liquid?.nicotinaFreebase && liquid?.nicotinaFreebase !== 'ninguna') ? liquid.nicotinaFreebase : '',
     nicotinaSales:    (liquid?.nicotinaSales    && liquid?.nicotinaSales    !== 'ninguna') ? liquid.nicotinaSales    : '',
@@ -766,9 +767,25 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
           </span>
         </label>
         <div className="form-row">
-          <div><label className="label">Tamano (ml)</label><input className="input" type="number" value={form.sizeML} onChange={e => set('sizeML', e.target.value)} /></div>
-          <div><label className="label">Botellas cerradas</label><input className="input" type="number" value={form.closedBottles} onChange={e => set('closedBottles', e.target.value)} /></div>
+          <div><label className="label">Tamano (ml)</label><input className="input" type="number" value={form.sizeML} onChange={e => setForm(f => ({ ...f, sizeML: e.target.value, ...(!liquid ? { activeCapacity: e.target.value } : {}) }))} /></div>
+          {(liquid || form.bottleState === 'closed') && <div><label className="label">Botellas cerradas</label><input className="input" type="number" min="0" step="1" value={form.closedBottles} onChange={e => set('closedBottles', e.target.value)} /></div>}
         </div>
+        {liquid && <div className="bg-[#101c35] border border-white/10 rounded-xl p-3 space-y-3">
+          <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={form.addOpenBottle} disabled={saving} onChange={e => set('addOpenBottle', e.target.checked)} className="w-4 h-4 accent-[#00e5a0]" />
+            Añadir frasco abierto
+          </label>
+          {form.addOpenBottle && <div>
+            <label className="label">ML restantes del frasco abierto</label>
+            <input className="input" type="number" min="0.1" step="0.1" max={liquid.activeCapacity || liquid.sizeML || 100} value={form.openML} disabled={saving} onChange={e => set('openML', e.target.value)} placeholder="Ej.: 35" />
+            <p className="text-xs text-slate-400 mt-2">Se suman al saldo de este mismo líquido. No se descuentan botellas cerradas.</p>
+            <p className="text-xs text-[#00e5a0] mt-1">Saldo actual: {Number(liquid.activeSaldo || 0)} ml · Saldo después de añadir: {Number(liquid.activeSaldo || 0) + (Number(form.openML) || 0)} ml</p>
+          </div>}
+        </div>}
+        {!liquid && <div className="form-row">
+          <div><label className="label">Estado de la botella</label><select className="select" value={form.bottleState} onChange={e => set('bottleState', e.target.value)}><option value="closed">Botella cerrada</option><option value="open">Botella abierta</option></select></div>
+          {form.bottleState === 'open' && <div><label className="label">ML disponibles en la botella abierta</label><input className="input" type="number" min="0.1" step="0.1" max={form.activeCapacity} value={form.openML} onChange={e => set('openML', e.target.value)} /><p className="text-xs text-slate-400 mt-2">Si existe el mismo líquido, se sumarán estos ml a su saldo.</p></div>}
+        </div>}
         <div className="bg-[#101c35] rounded-xl p-3 space-y-3">
           <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Nicotina</div>
           <div className="flex items-center gap-2">
@@ -793,7 +810,7 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
           )}
         </div>
         {!liquid && (
-          <div><label className="label">Capacidad botella activa (pts)</label><input className="input" type="number" value={form.activeCapacity} onChange={e => set('activeCapacity', e.target.value)} /></div>
+          <div><label className="label">Capacidad de la botella (puntos)</label><input className="input" type="number" min="1" value={form.activeCapacity} onChange={e => set('activeCapacity', e.target.value)} /></div>
         )}
         <div>
           <label className="label">Imagen del liquido</label>
@@ -819,16 +836,33 @@ function LiquidFormModal({ liquid, onClose, onSave, settings, title, businessId,
           </div>
         </div>
         <div className="card p-4 space-y-2">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Puntos por Recarga</div>
-          <div className="grid grid-cols-3 gap-2">
-            <div><label className="label">RD$50 = pts</label><input className="input" type="number" value={form.pointsR50} onChange={e => set('pointsR50', e.target.value)} /></div>
-            <div><label className="label">RD$100 = pts</label><input className="input" type="number" value={form.pointsR100} onChange={e => set('pointsR100', e.target.value)} /></div>
-            <div><label className="label">RD$150 = pts</label><input className="input" type="number" value={form.pointsR150} onChange={e => set('pointsR150', e.target.value)} /></div>
+          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Consumo por recarga</div>
+          <p className="text-xs text-slate-400">Los precios se definen en Configuración. Ajusta aquí el consumo de este líquido.</p>
+          <select className="select" value={form.consumptionUnit} onChange={e => set('consumptionUnit', e.target.value)}>
+            <option value="points">Puntos</option><option value="ml">Mililitros (ml)</option>
+          </select>
+          <p className="text-xs text-slate-400">Frasco: {form.sizeML} ml = {form.activeCapacity} puntos. El consumo en ml se convierte a puntos para descontarlo del saldo.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {refillButtons.map(b => {
+              const factor = form.consumptionUnit === 'ml' ? Number(form.sizeML) / Number(form.activeCapacity) : 1
+              const points = form.refillConsumption[String(b.price)] ?? b.points
+              return <div key={b.price}>
+                <label className="label">RD$ {b.price} — {form.consumptionUnit === 'ml' ? 'ml' : 'pts'}</label>
+                <input className="input" type="number" min="0.0001" step="any"
+                  value={points === '' ? '' : Number((Number(points) * factor).toFixed(10))}
+                  onChange={e => setForm(f => ({ ...f, refillConsumption: { ...f.refillConsumption, [String(b.price)]: e.target.value === '' ? '' : Number(e.target.value) / factor } }))} />
+              </div>
+            })}
           </div>
+          <LiquidProjectionCard liquid={form} settings={settings} />
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" disabled={saving} onClick={async () => { if (!form.name) return toast.error('Nombre requerido'); await onSave(form) }}>
+          <button className="btn-primary" disabled={saving} onClick={async () => { if (!form.name) return toast.error('Nombre requerido');
+            if (!(Number(form.activeCapacity) > 0) || !(Number(form.sizeML) > 0)) return toast.error('Capacidad y tamaño deben ser mayores que cero');
+            if (![form.costPerBottle || 0, form.pricePerBottle || 0].every(v => Number.isFinite(Number(v)) && Number(v) >= 0)) return toast.error('Costo y precio deben ser válidos');
+            if (!refillButtons.length || !refillButtons.every(b => Number.isFinite(Number(form.refillConsumption[String(b.price)])) && Number(form.refillConsumption[String(b.price)]) > 0 && Number(form.refillConsumption[String(b.price)]) <= Number(form.activeCapacity))) return toast.error('Cada consumo debe ser mayor que cero y no superar la capacidad');
+            await onSave({ ...form, refillConsumption: Object.fromEntries(refillButtons.map(b => [String(b.price), Number(form.refillConsumption[String(b.price)])])) }) }}>
             {saving ? 'Guardando...' : (liquid ? 'Guardar Cambios' : 'Registrar Líquido')}
           </button>
         </div>
@@ -876,8 +910,8 @@ function AdjustSaldoModal({ liquid, onClose, onSave }) {
   )
 }
 
-function LiquidDetailModal({ liquid, refillSales = [], onClose }) {
-  const r = getRendimientoReport(liquid, refillSales)
+function LiquidDetailModal({ liquid, refillSales = [], settings, onClose }) {
+  const r = getRendimientoReport(liquid, refillSales, settings)
   return (
     <Modal title={`💧 ${liquid.name}`} onClose={onClose}>
       <div className="space-y-4">
@@ -888,7 +922,7 @@ function LiquidDetailModal({ liquid, refillSales = [], onClose }) {
             { l: 'Costo botella', v: fmt(liquid.costPerBottle) },
             { l: 'Precio frasco', v: liquid.pricePerBottle ? fmt(liquid.pricePerBottle) : '—' },
             { l: 'Botellas cerradas', v: liquid.closedBottles },
-            { l: 'Pts R50/100/150', v: `${liquid.pointsR50}/${liquid.pointsR100}/${liquid.pointsR150}` },
+            { l: 'Consumo por recarga', v: getRefillButtons(settings).map(b => 'RD$' + b.price + ': ' + fmtProjection(getPointsForType(liquid, b.price, settings)) + ' pts').join(' · ') },
           ].map((s, i) => (
             <div key={i} className="bg-[#101c35] rounded-lg p-3">
               <div className="text-xs text-slate-500">{s.l}</div>
@@ -901,7 +935,7 @@ function LiquidDetailModal({ liquid, refillSales = [], onClose }) {
           {[
             { l: 'Total recargas', v: liquid.totalRechargesAllTime || 0, c: 'text-[#00e5a0]' },
             { l: 'Ingresos totales', v: fmt(liquid.totalRevenueAllTime || 0), c: 'text-[#f59e0b]' },
-            { l: 'Ganancia real', v: fmt(r.realNetProfit), c: r.realNetProfit >= 0 ? 'text-[#00e5a0]' : 'text-red-400' },
+            { l: 'Ganancia real', v: fmtLiquidMoney(r.realNetProfit), c: r.realNetProfit >= 0 ? 'text-[#00e5a0]' : 'text-red-400' },
           ].map((s, i) => (
             <div key={i} className="bg-[#101c35] rounded-lg p-3 text-center">
               <div className="text-xs text-slate-500 mb-0.5">{s.l}</div>
@@ -909,8 +943,25 @@ function LiquidDetailModal({ liquid, refillSales = [], onClose }) {
             </div>
           ))}
         </div>
+        <LiquidProjectionCard liquid={liquid} settings={settings} />
         <button className="btn-secondary w-full" onClick={onClose}>Cerrar</button>
       </div>
     </Modal>
   )
+}
+
+function LiquidProjectionCard({ liquid, settings }) {
+  const rows = getRefillProjections(liquid, settings)
+  return <div className="card p-4 space-y-3 min-w-0">
+    <div className="font-semibold text-slate-200">{liquid.name || 'Frasco'} — Proyecciones por frasco</div>
+    <div className="text-xs text-slate-400">{liquid.sizeML} ml · Costo: {fmtLiquidMoney(liquid.costPerBottle)} · Venta: {fmtLiquidMoney(liquid.pricePerBottle)} · Beneficio del frasco: {fmtLiquidMoney(Number(liquid.pricePerBottle || 0) - Number(liquid.costPerBottle || 0))}</div>
+    {rows.map(row => <div key={row.price} className="bg-[#101c35] rounded-lg p-3 text-xs space-y-1">
+      <div className="font-semibold text-[#00c4e8]">Recarga RD$ {row.price} · Consume {fmtProjection(row.points)} pts ({fmtProjection(row.points * Number(liquid.sizeML || 0) / Number(liquid.activeCapacity || 1))} ml)</div>
+      <div className="text-slate-300">Rinde {fmtProjection(row.expected)} recargas · Costo por recarga: {fmtLiquidMoney(row.cost)}</div>
+      <div className={row.profit >= 0 ? 'text-[#00e5a0]' : 'text-red-400'}>Beneficio por recarga: {fmtLiquidMoney(row.profit)}</div>
+      <div className="text-slate-300">Ingreso proyectado: {fmtLiquidMoney(row.revenue)} · Beneficio proyectado: {fmtLiquidMoney(row.benefit)}</div>
+      <div className="text-slate-500">{row.complete} recargas completas · Sobrante: {fmtProjection(row.remaining)} pts</div>
+    </div>)}
+    <p className="text-xs text-slate-500">Cada opción es un escenario independiente usando todo un frasco; no se suman entre sí. Son estimaciones antes de descuentos, impuestos y otros gastos, no ganancias realizadas. El rendimiento teórico puede incluir una fracción de recarga.</p>
+  </div>
 }

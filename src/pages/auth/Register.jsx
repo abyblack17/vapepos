@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import toast from 'react-hot-toast'
+import { useNavigation } from '../../contexts/NavigationContext'
 
 export default function Register({ onGoLogin }) {
   const { registerBusiness, error, setError } = useAuth()
   const [loading, setLoading] = useState(false)
-  const [registered, setRegistered] = useState(false)
+  const { navigate } = useNavigation()
   const [form, setForm] = useState({
     businessName: '',
     ownerName:    '',
@@ -35,34 +36,20 @@ export default function Register({ onGoLogin }) {
     setLoading(true)
     const result = await registerBusiness(form)
     if (result.success) {
-      setRegistered(true)
-      toast.success('Registro recibido. La cuenta quedó pendiente de activación.')
+      navigate('dashboard')
+      if (result.autoLogin) toast.success('¡Tu tienda está lista!')
+      else {
+        toast.success('Tu tienda fue creada. Inicia sesión para entrar.')
+        onGoLogin()
+      }
     } else {
       toast.error(result.error)
     }
     setLoading(false)
   }
 
-  if (registered) {
-    return (
-      <div className="min-h-screen bg-[#080d18] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-[#0c1424] border border-[#f59e0b]/30 rounded-2xl p-8 text-center">
-          <div className="w-16 h-16 mx-auto rounded-full bg-[#f59e0b]/10 border border-[#f59e0b]/30 flex items-center justify-center text-3xl mb-5">⏳</div>
-          <div className="font-display text-2xl font-black text-slate-100 mb-3">Cuenta pendiente de activación</div>
-          <p className="text-sm text-slate-400 leading-relaxed mb-5">
-            Recibimos el registro de <strong className="text-slate-200">{form.businessName}</strong>. Un administrador debe validar y activar la cuenta antes de que puedas utilizar VapePOS.
-          </p>
-          <div className="bg-[#101c35] rounded-xl p-4 text-sm text-slate-300 mb-6">
-            Te avisaremos cuando el acceso esté habilitado. Tus credenciales ya fueron registradas y podrás usarlas después de la activación.
-          </div>
-          <button onClick={onGoLogin} className="btn-secondary w-full">Volver al inicio de sesión</button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="min-h-screen bg-[#080d18] flex items-center justify-center p-4">
+    <div className="auth-screen bg-[#080d18]">
       <div className="w-full max-w-lg">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -72,6 +59,7 @@ export default function Register({ onGoLogin }) {
 
         <div className="bg-[#0c1424] border border-white/10 rounded-2xl p-8">
           <div className="font-display font-bold text-slate-100 text-xl mb-6">Crear Nueva Tienda</div>
+          <p className="text-sm text-[#00e5a0] mb-5">Pro gratis durante 3 días. La prueba comienza automáticamente al registrarte.</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Business info */}

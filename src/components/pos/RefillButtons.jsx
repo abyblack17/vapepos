@@ -37,7 +37,7 @@ export default function RefillButtons({ onAdd }) {
   const canAddRefill = (price) => {
     if (!liquid?.hasActive) return false
     const pts = getPointsForType(liquid, price, state.settings)
-    return saldoLeft >= pts
+    return pts > 0 && saldoLeft >= pts
   }
 
   const handleRefill = (price) => {
